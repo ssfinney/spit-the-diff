@@ -2,7 +2,7 @@
 
 > Where your diffs drop bars.
 
-A GitHub Action that turns pull request diffs into creative summaries — rap verses, haiku, or playful code roasts — using AI. Make your PRs more engaging and easier to skim.
+A GitHub Action that turns pull request diffs into rap verses, haiku, or code roasts using AI.
 
 ---
 
@@ -10,7 +10,7 @@ A GitHub Action that turns pull request diffs into creative summaries — rap ve
 
 **Rap mode (default):**
 
-> 🎤 **Diff Cypher**
+> 🎤 **Rap**
 >
 > Serializer twisted, cookies lost the fight,
 > Passport guards clashing in the middle of the night.
@@ -19,7 +19,7 @@ A GitHub Action that turns pull request diffs into creative summaries — rap ve
 
 **Haiku mode:**
 
-> 🌸 **Diff Haiku**
+> 🌸 **Haiku**
 >
 > Old serializer
 > Cookies crumble into dust
