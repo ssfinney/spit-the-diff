@@ -98,12 +98,12 @@ async function fetchPRData(
     mediaType: { format: 'diff' },
   });
 
-  // Fetch changed files for context
-  const { data: files } = await octokit.rest.pulls.listFiles({
+  // Fetch all changed files (paginate so large PRs aren't silently truncated)
+  const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
     owner,
     repo,
     pull_number: prNumber,
-    per_page: 30,
+    per_page: 100,
   });
 
   const filesChanged = files.map(f => f.filename);
