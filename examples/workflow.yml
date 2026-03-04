@@ -1,0 +1,40 @@
+name: spit-the-diff
+
+on:
+  pull_request:
+    types: [opened, synchronize, labeled]
+
+jobs:
+  rap-summary:
+    runs-on: ubuntu-latest
+    # For 'labeled' events, only run when the roast-me label is added;
+    # otherwise every label addition would trigger a duplicate comment.
+    if: github.event.action != 'labeled' || github.event.label.name == 'roast-me'
+    permissions:
+      contents: read        # needed for actions/checkout
+      pull-requests: write  # needed to post PR comments
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate PR summary
+        uses: ssfinney/spit-the-diff@v1
+        with:
+          # Output format: rap or haiku
+          # Roast mode activates automatically when the PR has a "roast-me" label
+          format: rap
+
+          # Model to use — gpt-4o-mini is cheap and fast
+          model: gpt-4o-mini
+
+          # Maximum lines in the output
+          max_lines: 8
+
+          # Tone: friendly or playful
+          tone: friendly
+
+          # Store your OpenAI API key as a repository secret
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+
+          # GitHub token is provided automatically
+          github_token: ${{ github.token }}

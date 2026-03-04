@@ -1,0 +1,41 @@
+name: 'spit-the-diff'
+description: 'Where your diffs drop bars. Generates creative rap, haiku, or roast summaries of pull requests using AI.'
+author: 'ssfinney'
+
+branding:
+  icon: 'mic'
+  color: 'purple'
+
+inputs:
+  format:
+    description: 'Output format: rap, haiku. (roast is triggered automatically via the roast-me PR label)'
+    required: false
+    default: 'rap'
+
+  model:
+    description: 'OpenAI model to use for generation'
+    required: false
+    default: 'gpt-4o-mini'
+
+  max_lines:
+    description: 'Maximum number of lines in the output'
+    required: false
+    default: '8'
+
+  tone:
+    description: 'Output tone: friendly or playful'
+    required: false
+    default: 'friendly'
+
+  openai_api_key:
+    description: 'OpenAI API key for LLM calls'
+    required: true
+
+  github_token:
+    description: 'GitHub token used to post PR comments'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
