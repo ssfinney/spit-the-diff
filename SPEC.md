@@ -16,12 +16,6 @@ The goal is to make pull requests more engaging and easier to skim by turning co
 - Provide a simple GitHub Action that works with minimal configuration.
 - Keep the output short enough to read quickly in PR comments.
 
-### Non-Goals (v1)
-- Full AI code review
-- Static analysis or security scanning
-- Large-scale multi-model orchestration
-- Audio/music generation
-
 ---
 
 ## Core Features (v1)
@@ -31,7 +25,7 @@ Default mode. Generates a short rap verse summarizing the PR changes.
 
 **Example output:**
 
-> 🎤 Diff Cypher
+> 🎤 Rap
 >
 > Serializer twisted, cookies lost the fight,
 > Passport guards clashing in the middle of the night.
@@ -51,7 +45,7 @@ Alternative format for minimal poetic summaries.
 
 **Example:**
 
-> 🌸 Diff Haiku
+> 🌸 Haiku
 >
 > Old serializer
 > Cookies crumble into dust
@@ -267,19 +261,7 @@ spit-the-diff/
 
 ## Future Features (Post v1)
 
-- AI panel review (multiple model opinions)
 - incident postmortem rap summaries
-- release notes cypher
-- Suno-generated rap songs
+- Suno-generated rap songs about a release
 - Slack / Discord integrations
 - comment-triggered commands (`/rap`, `/haiku`, `/roast`)
-
----
-
-## Success Criteria
-
-v1 is successful if:
-- developers can install the action in <2 minutes
-- PR comments generate correctly
-- outputs are short, readable, and funny
-- cost per PR remains negligible
