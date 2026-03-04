@@ -80,7 +80,8 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist is intentionally committed for GitHub Actions (action runner needs dist/index.js)
+# dist
 
 # Gatsby files
 .cache/
