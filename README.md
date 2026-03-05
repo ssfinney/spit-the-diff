@@ -111,8 +111,7 @@ Do not print the key in logs or echo commands in CI.
 |-------|-------------|---------|
 | `format` | Output format: `rap` or `haiku` | `rap` |
 | `model` | OpenAI model to use | `gpt-4o-mini` |
-| `max_lines` | Maximum lines in the output | `8` |
-| `tone` | Output tone: `friendly` or `playful` | `friendly` |
+| `roast_label` | PR label that enables roast mode | `roast-me` |
 | `openai_api_key` | Your OpenAI API key (**required**) | — |
 | `github_token` | GitHub token for posting comments | `${{ github.token }}` |
 
@@ -133,6 +132,27 @@ Roasts target code quality and patterns — never the developer.
 | `rap` | `format: rap` | 6–8 line hip-hop verse |
 | `haiku` | `format: haiku` | 3-line 5-7-5 poetic summary |
 | `roast` | `roast-me` label | Playful battle-rap code roast |
+
+---
+
+## Diff Compression + Guardrails
+
+The action builds prompts in a deterministic order to reduce token usage:
+
+1. PR title + description
+2. Structured file list (`filename | status | +additions/-deletions`)
+3. Compressed diff payload:
+   - `Change Summary` for top churn files
+   - `Selected Diff Hunks (truncated)` for top files, capped per file
+   - For very large PRs, only `Change Summary` is sent
+
+Output cleanup guardrails are applied before commenting:
+
+- Removes prefacing lines (e.g. “Here’s your …”)
+- Strips accidental headers/titles and bullet prefixes
+- Enforces line limits (`rap <= 8`, `roast <= 6`)
+- Enforces `haiku` as exactly 3 lines (one retry, then padded if needed)
+- Applies a basic profanity blacklist replacement
 
 ---
 

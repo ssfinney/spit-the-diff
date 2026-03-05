@@ -8,7 +8,7 @@ branding:
 
 inputs:
   format:
-    description: 'Output format: rap, haiku. (roast is triggered automatically via the roast-me PR label)'
+    description: 'Output format: rap or haiku. Roast mode is enabled only when the roast label is present.'
     required: false
     default: 'rap'
 
@@ -17,15 +17,10 @@ inputs:
     required: false
     default: 'gpt-4o-mini'
 
-  max_lines:
-    description: 'Maximum number of lines in the output'
+  roast_label:
+    description: 'PR label that enables roast mode'
     required: false
-    default: '8'
-
-  tone:
-    description: 'Output tone: friendly or playful'
-    required: false
-    default: 'friendly'
+    default: 'roast-me'
 
   openai_api_key:
     description: 'OpenAI API key for LLM calls'
