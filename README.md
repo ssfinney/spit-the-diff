@@ -47,7 +47,7 @@ name: spit-the-diff
 
 on:
   pull_request:
-    types: [opened, synchronize, labeled]
+    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   rap-summary:
@@ -81,7 +81,7 @@ openai_api_key: ${{ secrets.OPENAI_API_KEY }}
 
 ### 3) Open a PR
 
-When a pull request is opened or updated, the action comments with a creative summary.
+When a pull request is opened or updated, the action maintains one persistent bot comment and edits it in place on subsequent runs.
 
 ---
 
@@ -114,6 +114,8 @@ Do not print the key in logs or echo commands in CI.
 | `roast_label` | PR label that enables roast mode | `roast-me` |
 | `openai_api_key` | Your OpenAI API key (**required**) | — |
 | `github_token` | GitHub token for posting comments | `${{ github.token }}` |
+| `profanity_filter` | `off` or `on` (uses PurgoMalum API) | `on` |
+| `profanity_api_base_url` | Base URL for PurgoMalum-compatible service | `https://www.purgomalum.com` |
 
 ---
 
@@ -152,9 +154,18 @@ Output cleanup guardrails are applied before commenting:
 - Strips accidental headers/titles and bullet prefixes
 - Enforces line limits (`rap <= 8`, `roast <= 6`)
 - Enforces `haiku` as exactly 3 lines (one retry, then padded if needed)
-- Applies a basic profanity blacklist replacement
+- External profanity filtering via PurgoMalum API is enabled by default (`profanity_filter: on`) and can be disabled with `profanity_filter: off`
 
 ---
+
+
+## Event + Cost Guardrails
+
+The action includes built-in protections to reduce noisy runs and comment spam:
+
+- **Label filtering:** on `pull_request:labeled`, it exits early unless the added label matches `roast_label` (default `roast-me`).
+- **Single comment strategy:** it writes a stable marker (`<!-- spit-the-diff:hash=... -->`) and updates that same comment on later runs.
+- **Hash skip on synchronize:** for `synchronize` events, if the input hash (title/body + file summary + compressed diff + mode) is unchanged, it skips the LLM call and comment update.
 
 ## Cost
 

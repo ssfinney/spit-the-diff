@@ -31,6 +31,16 @@ inputs:
     required: false
     default: ${{ github.token }}
 
+  profanity_filter:
+    description: 'Profanity filter mode: off or on (uses PurgoMalum API when on)'
+    required: false
+    default: 'on'
+
+  profanity_api_base_url:
+    description: 'Base URL for profanity API provider (PurgoMalum-compatible)'
+    required: false
+    default: 'https://www.purgomalum.com'
+
 runs:
   using: 'node20'
   main: 'dist/index.js'
