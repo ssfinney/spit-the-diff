@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 type Format = 'rap' | 'haiku' | 'roast';
+type ProfanityFilterMode = 'on' | 'off';
 
 interface PRFile {
   filename: string;
@@ -40,10 +41,30 @@ const MAX_LINES_BY_FORMAT: Record<Format, number> = {
 };
 const COMMENT_MARKER_KEY = 'spit-the-diff';
 const COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\s*-->/i;
+const VALID_FORMATS: readonly Format[] = ['rap', 'haiku', 'roast'];
+const VALID_PROFANITY_MODES: readonly ProfanityFilterMode[] = ['on', 'off'];
 
 interface ExistingBotComment {
   id: number;
   hash?: string;
+}
+
+function parseFormat(input: string, fallback: Format = 'rap'): Format {
+  if (VALID_FORMATS.includes(input as Format)) {
+    return input as Format;
+  }
+
+  core.warning(`Invalid format "${input}" supplied. Falling back to "${fallback}".`);
+  return fallback;
+}
+
+function parseProfanityFilterMode(input: string, fallback: ProfanityFilterMode = 'on'): ProfanityFilterMode {
+  if (VALID_PROFANITY_MODES.includes(input as ProfanityFilterMode)) {
+    return input as ProfanityFilterMode;
+  }
+
+  core.warning(`Invalid profanity_filter value "${input}" supplied. Falling back to "${fallback}".`);
+  return fallback;
 }
 
 function loadPromptTemplate(format: Format): string {
@@ -307,12 +328,12 @@ async function upsertComment(
 }
 
 async function run(): Promise<void> {
-  const format = (core.getInput('format') || 'rap') as Format;
+  const format = parseFormat(core.getInput('format') || 'rap');
   const model = core.getInput('model') || 'gpt-4o-mini';
   const openaiApiKey = core.getInput('openai_api_key');
   const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
   const roastLabel = core.getInput('roast_label') || 'roast-me';
-  const profanityFilter = core.getInput('profanity_filter') || 'on';
+  const profanityFilterMode = parseProfanityFilterMode(core.getInput('profanity_filter') || 'on');
   const profanityApiBaseUrl = core.getInput('profanity_api_base_url') || 'https://www.purgomalum.com';
 
   if (!openaiApiKey) {
@@ -383,7 +404,7 @@ async function run(): Promise<void> {
     }
   }
 
-  if (profanityFilter === 'on') {
+  if (profanityFilterMode === 'on') {
     try {
       const filtered = await applyProfanityFilter(sanitized.text, profanityApiBaseUrl);
       if (filtered.detected) {

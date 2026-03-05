@@ -2,13 +2,11 @@ name: spit-the-diff
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
 
 jobs:
   rap-summary:
     runs-on: ubuntu-latest
-    # For labeled events, only run when roast label is added.
-    if: github.event.action != 'labeled' || github.event.label.name == 'roast-me'
     permissions:
       contents: read
       pull-requests: write
