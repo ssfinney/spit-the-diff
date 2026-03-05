@@ -47,7 +47,7 @@ name: spit-the-diff
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
 
 jobs:
   rap-summary:
@@ -123,6 +123,8 @@ Do not print the key in logs or echo commands in CI.
 
 Add the label **`roast-me`** to any PR and the action will automatically switch to roast mode, regardless of the `format` input.
 
+> Note: if your workflow only listens to `opened`, `synchronize`, and `reopened`, roast mode takes effect on the next run (for example after the next push to the PR branch).
+
 Roasts target code quality and patterns — never the developer.
 
 ---
@@ -163,7 +165,6 @@ Output cleanup guardrails are applied before commenting:
 
 The action includes built-in protections to reduce noisy runs and comment spam:
 
-- **Label filtering:** on `pull_request:labeled`, it exits early unless the added label matches `roast_label` (default `roast-me`).
 - **Single comment strategy:** it writes a stable marker (`<!-- spit-the-diff:hash=... -->`) and updates that same comment on later runs.
 - **Hash skip on synchronize:** for `synchronize` events, if the input hash (title/body + file summary + compressed diff + mode) is unchanged, it skips the LLM call and comment update.
 
