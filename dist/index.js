@@ -35701,6 +35701,22 @@ const MAX_LINES_BY_FORMAT = {
 };
 const COMMENT_MARKER_KEY = 'spit-the-diff';
 const COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\s*-->/i;
+const VALID_FORMATS = ['rap', 'haiku', 'roast'];
+const VALID_PROFANITY_MODES = ['on', 'off'];
+function parseFormat(input, fallback = 'rap') {
+    if (VALID_FORMATS.includes(input)) {
+        return input;
+    }
+    core.warning(`Invalid format "${input}" supplied. Falling back to "${fallback}".`);
+    return fallback;
+}
+function parseProfanityFilterMode(input, fallback = 'on') {
+    if (VALID_PROFANITY_MODES.includes(input)) {
+        return input;
+    }
+    core.warning(`Invalid profanity_filter value "${input}" supplied. Falling back to "${fallback}".`);
+    return fallback;
+}
 function loadPromptTemplate(format) {
     const templatePath = path.resolve(__dirname, '..', 'prompts', TEMPLATE_BY_FORMAT[format]);
     return fs.readFileSync(templatePath, 'utf8').trim();
@@ -35894,12 +35910,12 @@ async function upsertComment(octokit, owner, repo, prNumber, content, inputHash,
     await octokit.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
 }
 async function run() {
-    const format = (core.getInput('format') || 'rap');
+    const format = parseFormat(core.getInput('format') || 'rap');
     const model = core.getInput('model') || 'gpt-4o-mini';
     const openaiApiKey = core.getInput('openai_api_key');
     const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
     const roastLabel = core.getInput('roast_label') || 'roast-me';
-    const profanityFilter = core.getInput('profanity_filter') || 'on';
+    const profanityFilterMode = parseProfanityFilterMode(core.getInput('profanity_filter') || 'on');
     const profanityApiBaseUrl = core.getInput('profanity_api_base_url') || 'https://www.purgomalum.com';
     if (!openaiApiKey) {
         core.setFailed('openai_api_key input is required');
@@ -35955,7 +35971,7 @@ async function run() {
             sanitized = { text: padded.split('\n').slice(0, 3).join('\n'), needsHaikuRetry: false };
         }
     }
-    if (profanityFilter === 'on') {
+    if (profanityFilterMode === 'on') {
         try {
             const filtered = await applyProfanityFilter(sanitized.text, profanityApiBaseUrl);
             if (filtered.detected) {
