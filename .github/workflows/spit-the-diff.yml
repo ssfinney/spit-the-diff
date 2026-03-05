@@ -1,0 +1,26 @@
+name: spit-the-diff
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+jobs:
+  rap-summary:
+    runs-on: ubuntu-latest
+    if: github.event.action != 'labeled' || github.event.label.name == 'roast-me'
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate PR summary
+        uses: ./
+        with:
+          format: rap
+          model: gpt-4o-mini
+          max_lines: 8
+          tone: friendly
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          github_token: ${{ github.token }}
