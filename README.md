@@ -36,7 +36,9 @@ A GitHub Action that turns pull request diffs into rap verses, haiku, or code ro
 
 ---
 
-## Quick Start
+## Installation (GitHub Action)
+
+### 1) Add the workflow
 
 Add a workflow file to your repository at `.github/workflows/spit-the-diff.yml`:
 
@@ -63,7 +65,43 @@ jobs:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-Then add your `OPENAI_API_KEY` as a [repository secret](https://docs.github.com/en/actions/security-guides/encrypted-secrets). That's it.
+### 2) Add your OpenAI API key as a secret
+
+Create an encrypted secret named `OPENAI_API_KEY` in your repository settings:
+
+- **GitHub → Repository → Settings → Secrets and variables → Actions → New repository secret**
+- Name: `OPENAI_API_KEY`
+- Value: your OpenAI API key
+
+Then reference it exactly like this in the workflow:
+
+```yaml
+openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+```
+
+### 3) Open a PR
+
+When a pull request is opened or updated, the action comments with a creative summary.
+
+---
+
+## Safe API Key Integration
+
+Use these practices to keep your key secure:
+
+- **Always use GitHub Secrets** (`secrets.OPENAI_API_KEY`) instead of hardcoding keys.
+- **Never commit `.env` files** or keys to source control.
+- **Prefer least privilege:** use a dedicated OpenAI key for this action with usage limits/monitoring.
+- **Use organization secrets** if multiple repos share this action.
+- **Rotate keys immediately** if exposed in logs, commits, or screenshots.
+
+For local testing, export the key in your shell session (not in tracked files):
+
+```bash
+export OPENAI_API_KEY="your-key-here"
+```
+
+Do not print the key in logs or echo commands in CI.
 
 ---
 
@@ -107,6 +145,8 @@ Uses `gpt-4o-mini` by default. Estimated cost: **fractions of a cent per PR**.
 ## Contributing
 
 See [SPEC.md](./SPEC.md) for the full project specification and architecture overview.
+
+Install dependencies and build locally:
 
 ```
 npm install
