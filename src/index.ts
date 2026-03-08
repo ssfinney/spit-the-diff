@@ -98,6 +98,10 @@ async function generateWithHaikuRetry(
     const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
     creative = await callLLM(client, model, retryPrompt);
     sanitized = sanitizeOutput(effectiveFormat, creative);
+  } else if (!sanitized.text) {
+    core.info('Sanitized output was empty. Retrying once.');
+    creative = await callLLM(client, model, prompt);
+    sanitized = sanitizeOutput(effectiveFormat, creative);
   }
 
   return sanitized.text;
