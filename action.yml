@@ -17,6 +17,11 @@ inputs:
     required: false
     default: 'gpt-4o-mini'
 
+  max_files:
+    description: 'Maximum number of changed files to include in the diff sent to the LLM'
+    required: false
+    default: '6'
+
   roast_label:
     description: 'PR label that enables roast mode'
     required: false

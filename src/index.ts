@@ -171,8 +171,13 @@ function removeLeadingMetaLine(line: string): string {
   return trimmed.replace(/^[-*]+\s*/, '');
 }
 
+function normalizeUnicode(text: string): string {
+  // Replace runs of non-ASCII, non-emoji punctuation/symbols with an em dash
+  return text.replace(/[^\x00-\x7F\u2000-\u206F\u2600-\u27BF\uFE00-\uFEFF\u{1F000}-\u{1FFFF}]+/gu, '—');
+}
+
 function sanitizeOutput(format: Format, rawText: string): { text: string; needsHaikuRetry: boolean } {
-  const cleanedLines = rawText
+  const cleanedLines = normalizeUnicode(rawText)
     .split('\n')
     .map(removeLeadingMetaLine)
     .filter(Boolean);
@@ -192,9 +197,10 @@ function sanitizeOutput(format: Format, rawText: string): { text: string; needsH
   return { text: lines.join('\n').trim(), needsHaikuRetry: false };
 }
 
-function buildInputHash(format: Format, summary: PRSummary): string {
+function buildInputHash(format: Format, model: string, summary: PRSummary): string {
   const payload = JSON.stringify({
     format,
+    model,
     title: summary.title,
     body: summary.body,
     filesText: summary.filesText,
@@ -272,7 +278,8 @@ async function fetchPRData(
   octokit: ReturnType<typeof github.getOctokit>,
   owner: string,
   repo: string,
-  prNumber: number
+  prNumber: number,
+  maxFiles: number = DEFAULT_TOP_FILES
 ): Promise<PRSummary> {
   const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
 
@@ -296,7 +303,7 @@ async function fetchPRData(
     body: pr.body ?? '',
     files: normalizedFiles,
     filesText: formatFilesList(normalizedFiles),
-    diffPayload: buildCompressedDiff(normalizedFiles),
+    diffPayload: buildCompressedDiff(normalizedFiles, maxFiles),
   };
 }
 
@@ -306,11 +313,11 @@ async function callLLM(apiKey: string, model: string, prompt: string): Promise<s
   const response = await client.chat.completions.create({
     model,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 300,
-    temperature: 0.85,
   });
 
-  const text = response.choices[0]?.message?.content?.trim();
+  const choice = response.choices[0];
+  core.info(`LLM finish_reason: ${choice?.finish_reason ?? 'unknown'}`);
+  const text = choice?.message?.content?.trim();
   if (!text) {
     throw new Error('LLM returned an empty response');
   }
@@ -392,8 +399,9 @@ async function run(): Promise<void> {
   }
 
   core.info('Fetching PR metadata and file patches...');
-  const summary = await fetchPRData(octokit, owner, repo, prNumber);
-  const inputHash = buildInputHash(effectiveFormat, summary);
+  const maxFiles = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
+  const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
+  const inputHash = buildInputHash(effectiveFormat, model, summary);
   const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
 
   if (action === 'synchronize' && existingComment?.hash === inputHash) {
