@@ -162,8 +162,8 @@ export function sanitizeOutput(format: Format, rawText: string): { text: string;
   let lines = cleanedLines;
 
   if (format === 'haiku') {
-    lines = lines.slice(0, 3);
-    if (lines.length < 3) {
+    lines = lines.slice(0, maxLines);
+    if (lines.length < maxLines) {
       return { text: lines.join('\n'), needsHaikuRetry: true };
     }
   } else {

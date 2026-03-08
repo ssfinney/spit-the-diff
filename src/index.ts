@@ -58,14 +58,15 @@ async function fetchPRData(
   prNumber: number,
   maxFiles: number = DEFAULT_TOP_FILES
 ): Promise<PRSummary> {
-  const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-
-  const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
-    owner,
-    repo,
-    pull_number: prNumber,
-    per_page: 100,
-  });
+  const [{ data: pr }, files] = await Promise.all([
+    octokit.rest.pulls.get({ owner, repo, pull_number: prNumber }),
+    octokit.paginate(octokit.rest.pulls.listFiles, {
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+    }),
+  ]);
 
   const normalizedFiles = files.map(file => ({
     filename: file.filename,
@@ -100,7 +101,8 @@ async function generateWithHaikuRetry(
     sanitized = sanitizeOutput(effectiveFormat, creative);
   } else if (!sanitized.text) {
     core.info('Sanitized output was empty. Retrying once.');
-    creative = await callLLM(client, model, prompt);
+    const emptyRetryPrompt = `${prompt}\n\nReminder: Output only the creative content, no title or explanation.`;
+    creative = await callLLM(client, model, emptyRetryPrompt);
     sanitized = sanitizeOutput(effectiveFormat, creative);
   }
 
@@ -199,9 +201,11 @@ async function run(): Promise<void> {
   core.info('Fetching PR metadata and file patches...');
   const maxFilesRaw = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
   const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : DEFAULT_TOP_FILES;
-  const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
+  const [summary, existingComment] = await Promise.all([
+    fetchPRData(octokit, owner, repo, prNumber, maxFiles),
+    findExistingBotComment(octokit, owner, repo, prNumber),
+  ]);
   const inputHash = buildInputHash(effectiveFormat, model, summary);
-  const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
 
   if (action === 'synchronize' && existingComment?.hash === inputHash) {
     core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');

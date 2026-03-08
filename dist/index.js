@@ -35709,13 +35709,15 @@ async function moderateText(client, text) {
     return result.results[0]?.flagged ?? false;
 }
 async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = lib_1.DEFAULT_TOP_FILES) {
-    const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-    const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
-        owner,
-        repo,
-        pull_number: prNumber,
-        per_page: 100,
-    });
+    const [{ data: pr }, files] = await Promise.all([
+        octokit.rest.pulls.get({ owner, repo, pull_number: prNumber }),
+        octokit.paginate(octokit.rest.pulls.listFiles, {
+            owner,
+            repo,
+            pull_number: prNumber,
+            per_page: 100,
+        }),
+    ]);
     const normalizedFiles = files.map(file => ({
         filename: file.filename,
         status: file.status,
@@ -35730,6 +35732,23 @@ async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = lib_1.DEFA
         filesText: (0, lib_1.formatFilesList)(normalizedFiles),
         diffPayload: (0, lib_1.buildCompressedDiff)(normalizedFiles, maxFiles),
     };
+}
+async function generateWithHaikuRetry(client, model, prompt, effectiveFormat) {
+    let creative = await callLLM(client, model, prompt);
+    let sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+    if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
+        core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
+        const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
+        creative = await callLLM(client, model, retryPrompt);
+        sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+    }
+    else if (!sanitized.text) {
+        core.info('Sanitized output was empty. Retrying once.');
+        const emptyRetryPrompt = `${prompt}\n\nReminder: Output only the creative content, no title or explanation.`;
+        creative = await callLLM(client, model, emptyRetryPrompt);
+        sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+    }
+    return sanitized.text;
 }
 async function callLLM(client, model, prompt) {
     const response = await client.chat.completions.create({
@@ -35799,9 +35818,11 @@ async function run() {
     core.info('Fetching PR metadata and file patches...');
     const maxFilesRaw = parseInt(core.getInput('max_files') || String(lib_1.DEFAULT_TOP_FILES), 10);
     const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : lib_1.DEFAULT_TOP_FILES;
-    const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
+    const [summary, existingComment] = await Promise.all([
+        fetchPRData(octokit, owner, repo, prNumber, maxFiles),
+        findExistingBotComment(octokit, owner, repo, prNumber),
+    ]);
     const inputHash = (0, lib_1.buildInputHash)(effectiveFormat, model, summary);
-    const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
     if (action === 'synchronize' && existingComment?.hash === inputHash) {
         core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
         return;
@@ -35809,32 +35830,20 @@ async function run() {
     core.info(`Building ${effectiveFormat} prompt...`);
     const prompt = (0, lib_1.buildPrompt)(effectiveFormat, summary);
     core.info(`Calling ${model}...`);
-    let creative = await callLLM(client, model, prompt);
-    let sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
-    if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
-        core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
-        const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
-        creative = await callLLM(client, model, retryPrompt);
-        sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
-        if (sanitized.needsHaikuRetry) {
-            sanitized = { text: sanitized.text, needsHaikuRetry: false };
-        }
-    }
-    let finalText = sanitized.text;
+    let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
     if (enableModeration) {
         core.info('Running moderation check...');
         const flagged = await moderateText(client, finalText);
         if (flagged) {
             core.warning('First attempt flagged by moderation. Retrying...');
-            creative = await callLLM(client, model, prompt);
-            sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
-            const flaggedAgain = await moderateText(client, sanitized.text);
+            const retryText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
+            const flaggedAgain = await moderateText(client, retryText);
             if (flaggedAgain) {
                 core.warning('Second attempt also flagged by moderation. Using fallback message.');
                 finalText = lib_1.MODERATION_FALLBACK;
             }
             else {
-                finalText = sanitized.text;
+                finalText = retryText;
             }
         }
     }
@@ -36006,8 +36015,8 @@ function sanitizeOutput(format, rawText) {
     const maxLines = exports.MAX_LINES_BY_FORMAT[format];
     let lines = cleanedLines;
     if (format === 'haiku') {
-        lines = lines.slice(0, 3);
-        if (lines.length < 3) {
+        lines = lines.slice(0, maxLines);
+        if (lines.length < maxLines) {
             return { text: lines.join('\n'), needsHaikuRetry: true };
         }
     }
@@ -36045,6 +36054,14 @@ function buildCommentBody(format, content, inputHash) {
 // compile time. There is no runtime filesystem dependency on prompts/*.txt.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.TEMPLATES = void 0;
+const PROMPT_FOOTER = `If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed: {files}
+
+Diff excerpt:
+{diff}`;
 exports.TEMPLATES = {
     rap: `You are a creative hip-hop lyricist. Write a short rap verse summarizing this GitHub pull request.
 
@@ -36058,14 +36075,7 @@ Requirements:
 - Do not use bullet points or numbering
 - Output only the verse, no title or explanation
 
-If the diff is large, prioritize the PR title and description.
-
-PR Title: {title}
-PR Description: {body}
-Files changed: {files}
-
-Diff excerpt:
-{diff}`,
+${PROMPT_FOOTER}`,
     haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
 
 Rules:
@@ -36076,14 +36086,7 @@ Rules:
 - No title or explanation
 - Output only the 3 lines
 
-If the diff is large, prioritize the PR title and description.
-
-PR Title: {title}
-PR Description: {body}
-Files changed: {files}
-
-Diff excerpt:
-{diff}`,
+${PROMPT_FOOTER}`,
     roast: `You are a playful battle-rap comedian. Write a lighthearted roast of the code changes in this GitHub pull request.
 
 Rules:
@@ -36096,14 +36099,7 @@ Rules:
 - Do not use bullet points or numbering
 - Output only the roast, no title or explanation
 
-If the diff is large, prioritize the PR title and description.
-
-PR Title: {title}
-PR Description: {body}
-Files changed: {files}
-
-Diff excerpt:
-{diff}`,
+${PROMPT_FOOTER}`,
 };
 
 
