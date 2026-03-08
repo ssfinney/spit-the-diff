@@ -17,7 +17,7 @@ jobs:
       - name: Generate PR summary
         uses: ./
         with:
-          format: haiku
+          format: rap
           model: gpt-4.1-mini
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           github_token: ${{ github.token }}
