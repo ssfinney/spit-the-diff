@@ -172,8 +172,11 @@ function removeLeadingMetaLine(line: string): string {
 }
 
 function normalizeUnicode(text: string): string {
-  // Replace runs of non-ASCII, non-emoji punctuation/symbols with an em dash
-  return text.replace(/[^\x00-\x7F\u2000-\u206F\u2600-\u27BF\uFE00-\uFEFF\u{1F000}-\u{1FFFF}]+/gu, '—');
+  // Replace runs of characters outside Latin/punctuation/emoji with an em dash.
+  // Allows U+0000-U+04FF (Latin through Cyrillic, including spacing modifier
+  // letters like curly apostrophe U+02BC), General Punctuation (U+2000-U+206F),
+  // Miscellaneous Symbols, and emoji.
+  return text.replace(/[^\u0000-\u04FF\u2000-\u206F\u2600-\u27BF\uFE00-\uFEFF\u{1F000}-\u{1FFFF}]+/gu, '—');
 }
 
 function sanitizeOutput(format: Format, rawText: string): { text: string; needsHaikuRetry: boolean } {
@@ -399,7 +402,8 @@ async function run(): Promise<void> {
   }
 
   core.info('Fetching PR metadata and file patches...');
-  const maxFiles = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
+  const maxFilesRaw = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
+  const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : DEFAULT_TOP_FILES;
   const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
   const inputHash = buildInputHash(effectiveFormat, model, summary);
   const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
@@ -444,6 +448,7 @@ async function run(): Promise<void> {
   core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
   await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, sanitized.text, inputHash, existingComment);
 
+  core.setOutput('content', sanitized.text);
   core.info('Done!');
 }
 

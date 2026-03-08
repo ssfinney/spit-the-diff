@@ -15,7 +15,7 @@ inputs:
   model:
     description: 'OpenAI model to use for generation'
     required: false
-    default: 'gpt-4o-mini'
+    default: 'gpt-4.1-mini'
 
   max_files:
     description: 'Maximum number of changed files to include in the diff sent to the LLM'
@@ -45,6 +45,10 @@ inputs:
     description: 'Base URL for profanity API provider (PurgoMalum-compatible)'
     required: false
     default: 'https://www.purgomalum.com'
+
+outputs:
+  content:
+    description: 'The generated creative summary text'
 
 runs:
   using: 'node20'
