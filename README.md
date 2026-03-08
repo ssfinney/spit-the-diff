@@ -83,6 +83,8 @@ openai_api_key: ${{ secrets.OPENAI_API_KEY }}
 
 When a pull request is opened or updated, the action maintains one persistent bot comment and edits it in place on subsequent runs.
 
+> **Fork PRs:** GitHub does not make repository secrets available to workflows triggered by `pull_request` events from forks. If you want the action to run on fork PRs, use `pull_request_target` instead — but read [GitHub's security guidance](https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#pull_request_target) carefully before doing so, as it runs in the context of the base branch with access to secrets.
+
 ---
 
 ## Safe API Key Integration
@@ -110,7 +112,7 @@ Do not print the key in logs or echo commands in CI.
 | Input | Description | Default |
 |-------|-------------|---------|
 | `format` | Output format: `rap` or `haiku` | `rap` |
-| `model` | OpenAI model to use | `gpt-4o-mini` |
+| `model` | OpenAI model to use | `gpt-4.1-mini` |
 | `roast_label` | PR label that enables roast mode | `roast-me` |
 | `openai_api_key` | Your OpenAI API key (**required**) | — |
 | `github_token` | GitHub token for posting comments | `${{ github.token }}` |
@@ -170,7 +172,7 @@ The action includes built-in protections to reduce noisy runs and comment spam:
 
 ## Cost
 
-Uses `gpt-4o-mini` by default. Estimated cost: **fractions of a cent per PR**.
+Uses `gpt-4.1-mini` by default. Estimated cost: **fractions of a cent per PR**.
 
 ---
 
