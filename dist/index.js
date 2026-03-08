@@ -35684,16 +35684,10 @@ const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const openai_1 = __importDefault(__nccwpck_require__(2583));
 const crypto_1 = __nccwpck_require__(6982);
-const fs = __importStar(__nccwpck_require__(9896));
-const path = __importStar(__nccwpck_require__(6928));
+const prompts_1 = __nccwpck_require__(6224);
 const MAX_PROMPT_DIFF_CHARS = 30000;
 const DEFAULT_TOP_FILES = 6;
 const DEFAULT_MAX_PATCH_LINES = 60;
-const TEMPLATE_BY_FORMAT = {
-    rap: 'rap.txt',
-    haiku: 'haiku.txt',
-    roast: 'roast.txt',
-};
 const MAX_LINES_BY_FORMAT = {
     rap: 8,
     haiku: 3,
@@ -35707,30 +35701,13 @@ const COMMENT_HEADERS = {
     haiku: '🌸 **Diff Haiku**',
     roast: '🔥 **Code Roast**',
 };
-const VALID_PROFANITY_MODES = ['on', 'off'];
+const MODERATION_FALLBACK = '_The generated content did not pass moderation. Try again._';
 function parseFormat(input, fallback = 'rap') {
     if (VALID_FORMATS.includes(input)) {
         return input;
     }
     core.warning(`Invalid format "${input}" supplied. Falling back to "${fallback}".`);
     return fallback;
-}
-function parseProfanityFilterMode(input, fallback = 'on') {
-    if (VALID_PROFANITY_MODES.includes(input)) {
-        return input;
-    }
-    core.warning(`Invalid profanity_filter value "${input}" supplied. Falling back to "${fallback}".`);
-    return fallback;
-}
-function loadPromptTemplate(format) {
-    const templatePath = path.resolve(__dirname, '..', 'prompts', TEMPLATE_BY_FORMAT[format]);
-    try {
-        return fs.readFileSync(templatePath, 'utf8').trim();
-    }
-    catch {
-        throw new Error(`Could not load prompt template for format "${format}" at ${templatePath}. ` +
-            `Ensure the prompts/ directory is present alongside dist/.`);
-    }
 }
 function formatFilesList(files) {
     if (files.length === 0) {
@@ -35771,8 +35748,7 @@ function buildCompressedDiff(files, topN = DEFAULT_TOP_FILES, maxPatchLines = DE
     return fullPayload;
 }
 function buildPrompt(format, summary) {
-    const template = loadPromptTemplate(format);
-    return template
+    return prompts_1.TEMPLATES[format]
         .replace('{title}', summary.title)
         .replace('{body}', summary.body || '(none)')
         .replace('{files}', summary.filesText)
@@ -35858,26 +35834,9 @@ async function findExistingBotComment(octokit, owner, repo, prNumber) {
     }
     return null;
 }
-async function applyProfanityFilter(text, baseUrl) {
-    const endpoint = new URL('/service/json', baseUrl);
-    endpoint.searchParams.set('text', text);
-    endpoint.searchParams.set('fill_char', '*');
-    const response = await fetch(endpoint, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) {
-        throw new Error(`PurgoMalum request failed with status ${response.status}`);
-    }
-    const payload = (await response.json());
-    if (typeof payload.result !== 'string') {
-        throw new Error('PurgoMalum response missing result field');
-    }
-    return {
-        text: payload.result,
-        detected: payload.result !== text,
-        skipped: false,
-    };
+async function moderateText(client, text) {
+    const result = await client.moderations.create({ input: text });
+    return result.results[0]?.flagged ?? false;
 }
 async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = DEFAULT_TOP_FILES) {
     const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
@@ -35902,8 +35861,7 @@ async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = DEFAULT_TO
         diffPayload: buildCompressedDiff(normalizedFiles, maxFiles),
     };
 }
-async function callLLM(apiKey, model, prompt) {
-    const client = new openai_1.default({ apiKey });
+async function callLLM(client, model, prompt) {
     const response = await client.chat.completions.create({
         model,
         messages: [{ role: 'user', content: prompt }],
@@ -35931,12 +35889,11 @@ async function upsertComment(octokit, owner, repo, prNumber, format, content, in
 }
 async function run() {
     const format = parseFormat(core.getInput('format') || 'rap');
-    const model = core.getInput('model') || 'gpt-4o-mini';
+    const model = core.getInput('model') || 'gpt-4.1-mini';
     const openaiApiKey = core.getInput('openai_api_key');
     const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
     const roastLabel = core.getInput('roast_label') || 'roast-me';
-    const profanityFilterMode = parseProfanityFilterMode(core.getInput('profanity_filter') || 'on');
-    const profanityApiBaseUrl = core.getInput('profanity_api_base_url') || 'https://www.purgomalum.com';
+    const enableModeration = core.getInput('enable_moderation') !== 'false';
     if (!openaiApiKey) {
         core.setFailed('openai_api_key input is required');
         return;
@@ -35952,6 +35909,7 @@ async function run() {
         return;
     }
     const octokit = github.getOctokit(githubToken);
+    const client = new openai_1.default({ apiKey: openaiApiKey });
     const { owner, repo } = ctx.repo;
     const prNumber = pr.number;
     const action = ctx.payload.action;
@@ -35981,38 +35939,116 @@ async function run() {
     core.info(`Building ${effectiveFormat} prompt...`);
     const prompt = buildPrompt(effectiveFormat, summary);
     core.info(`Calling ${model}...`);
-    let creative = await callLLM(openaiApiKey, model, prompt);
+    let creative = await callLLM(client, model, prompt);
     let sanitized = sanitizeOutput(effectiveFormat, creative);
     if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
         core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
         const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
-        creative = await callLLM(openaiApiKey, model, retryPrompt);
+        creative = await callLLM(client, model, retryPrompt);
         sanitized = sanitizeOutput(effectiveFormat, creative);
         if (sanitized.needsHaikuRetry) {
-            const padded = sanitized.text ? `${sanitized.text}\n\n` : '\n\n';
-            sanitized = { text: padded.split('\n').slice(0, 3).join('\n'), needsHaikuRetry: false };
+            sanitized = { text: sanitized.text, needsHaikuRetry: false };
         }
     }
-    if (profanityFilterMode === 'on') {
-        try {
-            const filtered = await applyProfanityFilter(sanitized.text, profanityApiBaseUrl);
-            if (filtered.detected) {
-                core.info('Profanity detected by PurgoMalum; applying censored output.');
+    let finalText = sanitized.text;
+    if (enableModeration) {
+        core.info('Running moderation check...');
+        const flagged = await moderateText(client, finalText);
+        if (flagged) {
+            core.warning('First attempt flagged by moderation. Retrying...');
+            creative = await callLLM(client, model, prompt);
+            sanitized = sanitizeOutput(effectiveFormat, creative);
+            const flaggedAgain = await moderateText(client, sanitized.text);
+            if (flaggedAgain) {
+                core.warning('Second attempt also flagged by moderation. Using fallback message.');
+                finalText = MODERATION_FALLBACK;
             }
-            sanitized = sanitizeOutput(effectiveFormat, filtered.text);
-        }
-        catch (error) {
-            core.warning(`profanity_filter=on but PurgoMalum check failed (${error instanceof Error ? error.message : String(error)}). Posting uncensored output.`);
+            else {
+                finalText = sanitized.text;
+            }
         }
     }
     core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
-    await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, sanitized.text, inputHash, existingComment);
-    core.setOutput('content', sanitized.text);
+    await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, finalText, inputHash, existingComment);
+    core.setOutput('content', finalText);
     core.info('Done!');
 }
 run().catch(err => {
     core.setFailed(err instanceof Error ? err.message : String(err));
 });
+
+
+/***/ }),
+
+/***/ 6224:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Prompt templates are defined here so they are bundled into dist/index.js at
+// compile time. There is no runtime filesystem dependency on prompts/*.txt.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.TEMPLATES = void 0;
+exports.TEMPLATES = {
+    rap: `You are a creative hip-hop lyricist. Write a short rap verse summarizing this GitHub pull request.
+
+Requirements:
+- Maximum 8 lines
+- Use rhyme and rhythm
+- Mention important files, functions, or modules when possible
+- Prefer mentioning specific files or modules over generic descriptions
+- Keep the tone humorous but respectful
+- No profanity
+- Do not use bullet points or numbering
+- Output only the verse, no title or explanation
+
+If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed: {files}
+
+Diff excerpt:
+{diff}`,
+    haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
+
+Rules:
+- Exactly 3 lines
+- Approximate 5-7-5 syllable structure
+- Focus on the main code change
+- Mention a file, function, or module if relevant
+- No title or explanation
+- Output only the 3 lines
+
+If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed: {files}
+
+Diff excerpt:
+{diff}`,
+    roast: `You are a playful battle-rap comedian. Write a lighthearted roast of the code changes in this GitHub pull request.
+
+Rules:
+- Roast the code patterns, complexity, or design choices — NOT the developer
+- Keep it playful and funny
+- Maximum 6 lines
+- Mention specific files, functions, or modules when possible
+- No profanity
+- No harassment or personal attacks
+- Do not use bullet points or numbering
+- Output only the roast, no title or explanation
+
+If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed: {files}
+
+Diff excerpt:
+{diff}`,
+};
 
 
 /***/ }),

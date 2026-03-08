@@ -113,11 +113,11 @@ Do not print the key in logs or echo commands in CI.
 |-------|-------------|---------|
 | `format` | Output format: `rap` or `haiku` | `rap` |
 | `model` | OpenAI model to use | `gpt-4.1-mini` |
+| `max_files` | Max changed files included in the diff payload | `6` |
 | `roast_label` | PR label that enables roast mode | `roast-me` |
+| `enable_moderation` | Run OpenAI moderation on output before posting | `true` |
 | `openai_api_key` | Your OpenAI API key (**required**) | — |
 | `github_token` | GitHub token for posting comments | `${{ github.token }}` |
-| `profanity_filter` | `off` or `on` (uses PurgoMalum API) | `on` |
-| `profanity_api_base_url` | Base URL for PurgoMalum-compatible service | `https://www.purgomalum.com` |
 
 ---
 
@@ -157,8 +157,8 @@ Output cleanup guardrails are applied before commenting:
 - Removes prefacing lines (e.g. “Here’s your …”)
 - Strips accidental headers/titles and bullet prefixes
 - Enforces line limits (`rap <= 8`, `roast <= 6`)
-- Enforces `haiku` as exactly 3 lines (one retry, then padded if needed)
-- External profanity filtering via PurgoMalum API is enabled by default (`profanity_filter: on`) and can be disabled with `profanity_filter: off`
+- Enforces `haiku` as exactly 3 lines (one retry if output is short)
+- Runs OpenAI moderation on output; retries once on a flag, then uses a safe fallback message (disable with `enable_moderation: false`)
 
 ---
 

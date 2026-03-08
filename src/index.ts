@@ -2,11 +2,9 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import OpenAI from 'openai';
 import { createHash } from 'crypto';
-import * as fs from 'fs';
-import * as path from 'path';
+import { TEMPLATES } from './prompts';
 
 type Format = 'rap' | 'haiku' | 'roast';
-type ProfanityFilterMode = 'on' | 'off';
 
 interface PRFile {
   filename: string;
@@ -28,12 +26,6 @@ const MAX_PROMPT_DIFF_CHARS = 30000;
 const DEFAULT_TOP_FILES = 6;
 const DEFAULT_MAX_PATCH_LINES = 60;
 
-const TEMPLATE_BY_FORMAT: Record<Format, string> = {
-  rap: 'rap.txt',
-  haiku: 'haiku.txt',
-  roast: 'roast.txt',
-};
-
 const MAX_LINES_BY_FORMAT: Record<Format, number> = {
   rap: 8,
   haiku: 3,
@@ -48,7 +40,8 @@ const COMMENT_HEADERS: Record<Format, string> = {
   haiku: '🌸 **Diff Haiku**',
   roast: '🔥 **Code Roast**',
 };
-const VALID_PROFANITY_MODES: readonly ProfanityFilterMode[] = ['on', 'off'];
+
+const MODERATION_FALLBACK = '_The generated content did not pass moderation. Try again._';
 
 interface ExistingBotComment {
   id: number;
@@ -62,27 +55,6 @@ function parseFormat(input: string, fallback: Format = 'rap'): Format {
 
   core.warning(`Invalid format "${input}" supplied. Falling back to "${fallback}".`);
   return fallback;
-}
-
-function parseProfanityFilterMode(input: string, fallback: ProfanityFilterMode = 'on'): ProfanityFilterMode {
-  if (VALID_PROFANITY_MODES.includes(input as ProfanityFilterMode)) {
-    return input as ProfanityFilterMode;
-  }
-
-  core.warning(`Invalid profanity_filter value "${input}" supplied. Falling back to "${fallback}".`);
-  return fallback;
-}
-
-function loadPromptTemplate(format: Format): string {
-  const templatePath = path.resolve(__dirname, '..', 'prompts', TEMPLATE_BY_FORMAT[format]);
-  try {
-    return fs.readFileSync(templatePath, 'utf8').trim();
-  } catch {
-    throw new Error(
-      `Could not load prompt template for format "${format}" at ${templatePath}. ` +
-        `Ensure the prompts/ directory is present alongside dist/.`
-    );
-  }
 }
 
 function formatFilesList(files: PRFile[]): string {
@@ -138,9 +110,7 @@ function buildCompressedDiff(files: PRFile[], topN = DEFAULT_TOP_FILES, maxPatch
 }
 
 function buildPrompt(format: Format, summary: PRSummary): string {
-  const template = loadPromptTemplate(format);
-
-  return template
+  return TEMPLATES[format]
     .replace('{title}', summary.title)
     .replace('{body}', summary.body || '(none)')
     .replace('{files}', summary.filesText)
@@ -248,33 +218,9 @@ async function findExistingBotComment(
   return null;
 }
 
-async function applyProfanityFilter(
-  text: string,
-  baseUrl: string
-): Promise<{ text: string; detected: boolean; skipped: boolean }> {
-  const endpoint = new URL('/service/json', baseUrl);
-  endpoint.searchParams.set('text', text);
-  endpoint.searchParams.set('fill_char', '*');
-
-  const response = await fetch(endpoint, {
-    method: 'GET',
-    signal: AbortSignal.timeout(5000),
-  });
-
-  if (!response.ok) {
-    throw new Error(`PurgoMalum request failed with status ${response.status}`);
-  }
-
-  const payload = (await response.json()) as { result?: string };
-  if (typeof payload.result !== 'string') {
-    throw new Error('PurgoMalum response missing result field');
-  }
-
-  return {
-    text: payload.result,
-    detected: payload.result !== text,
-    skipped: false,
-  };
+async function moderateText(client: OpenAI, text: string): Promise<boolean> {
+  const result = await client.moderations.create({ input: text });
+  return result.results[0]?.flagged ?? false;
 }
 
 async function fetchPRData(
@@ -310,9 +256,7 @@ async function fetchPRData(
   };
 }
 
-async function callLLM(apiKey: string, model: string, prompt: string): Promise<string> {
-  const client = new OpenAI({ apiKey });
-
+async function callLLM(client: OpenAI, model: string, prompt: string): Promise<string> {
   const response = await client.chat.completions.create({
     model,
     messages: [{ role: 'user', content: prompt }],
@@ -354,12 +298,11 @@ async function upsertComment(
 
 async function run(): Promise<void> {
   const format = parseFormat(core.getInput('format') || 'rap');
-  const model = core.getInput('model') || 'gpt-4o-mini';
+  const model = core.getInput('model') || 'gpt-4.1-mini';
   const openaiApiKey = core.getInput('openai_api_key');
   const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
   const roastLabel = core.getInput('roast_label') || 'roast-me';
-  const profanityFilterMode = parseProfanityFilterMode(core.getInput('profanity_filter') || 'on');
-  const profanityApiBaseUrl = core.getInput('profanity_api_base_url') || 'https://www.purgomalum.com';
+  const enableModeration = core.getInput('enable_moderation') !== 'false';
 
   if (!openaiApiKey) {
     core.setFailed('openai_api_key input is required');
@@ -380,6 +323,7 @@ async function run(): Promise<void> {
   }
 
   const octokit = github.getOctokit(githubToken);
+  const client = new OpenAI({ apiKey: openaiApiKey });
   const { owner, repo } = ctx.repo;
   const prNumber = pr.number as number;
   const action = ctx.payload.action;
@@ -417,38 +361,42 @@ async function run(): Promise<void> {
   const prompt = buildPrompt(effectiveFormat, summary);
 
   core.info(`Calling ${model}...`);
-  let creative = await callLLM(openaiApiKey, model, prompt);
+  let creative = await callLLM(client, model, prompt);
   let sanitized = sanitizeOutput(effectiveFormat, creative);
 
   if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
     core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
     const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
-    creative = await callLLM(openaiApiKey, model, retryPrompt);
+    creative = await callLLM(client, model, retryPrompt);
     sanitized = sanitizeOutput(effectiveFormat, creative);
     if (sanitized.needsHaikuRetry) {
-      const padded = sanitized.text ? `${sanitized.text}\n\n` : '\n\n';
-      sanitized = { text: padded.split('\n').slice(0, 3).join('\n'), needsHaikuRetry: false };
+      sanitized = { text: sanitized.text, needsHaikuRetry: false };
     }
   }
 
-  if (profanityFilterMode === 'on') {
-    try {
-      const filtered = await applyProfanityFilter(sanitized.text, profanityApiBaseUrl);
-      if (filtered.detected) {
-        core.info('Profanity detected by PurgoMalum; applying censored output.');
+  let finalText = sanitized.text;
+
+  if (enableModeration) {
+    core.info('Running moderation check...');
+    const flagged = await moderateText(client, finalText);
+    if (flagged) {
+      core.warning('First attempt flagged by moderation. Retrying...');
+      creative = await callLLM(client, model, prompt);
+      sanitized = sanitizeOutput(effectiveFormat, creative);
+      const flaggedAgain = await moderateText(client, sanitized.text);
+      if (flaggedAgain) {
+        core.warning('Second attempt also flagged by moderation. Using fallback message.');
+        finalText = MODERATION_FALLBACK;
+      } else {
+        finalText = sanitized.text;
       }
-      sanitized = sanitizeOutput(effectiveFormat, filtered.text);
-    } catch (error) {
-      core.warning(
-        `profanity_filter=on but PurgoMalum check failed (${error instanceof Error ? error.message : String(error)}). Posting uncensored output.`
-      );
     }
   }
 
   core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
-  await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, sanitized.text, inputHash, existingComment);
+  await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, finalText, inputHash, existingComment);
 
-  core.setOutput('content', sanitized.text);
+  core.setOutput('content', finalText);
   core.info('Done!');
 }
 
