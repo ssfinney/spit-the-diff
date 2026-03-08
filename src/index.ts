@@ -181,9 +181,14 @@ async function run(): Promise<void> {
   const prNumber = pr.number as number;
   const action = ctx.payload.action;
 
+  // Normalize a label for comparison: lowercase and collapse hyphens/spaces/underscores.
+  // This lets "roast-me", "roast me", and "roastme" all match each other.
+  const normalizeLabel = (s: string) => s.toLowerCase().replace(/[\s\-_]+/g, '');
+  const normalizedRoastLabel = normalizeLabel(roastLabel);
+
   if (action === 'labeled') {
     const appliedLabel = ctx.payload.label?.name;
-    if (appliedLabel !== roastLabel) {
+    if (normalizeLabel(appliedLabel ?? '') !== normalizedRoastLabel) {
       core.info(`Label event for "${appliedLabel ?? 'unknown'}" does not match roast label "${roastLabel}". Skipping.`);
       return;
     }
@@ -191,8 +196,8 @@ async function run(): Promise<void> {
 
   core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
 
-  const labels: string[] = (pr.labels ?? []).map((l: { name?: string }) => (l.name ?? '').toLowerCase());
-  const effectiveFormat: Format = labels.includes(roastLabel.toLowerCase()) ? 'roast' : format;
+  const labels: string[] = (pr.labels ?? []).map((l: { name?: string }) => normalizeLabel(l.name ?? ''));
+  const effectiveFormat: Format = labels.includes(normalizedRoastLabel) ? 'roast' : format;
 
   if (effectiveFormat === 'roast') {
     core.info(`${roastLabel} label detected — switching to roast mode`);

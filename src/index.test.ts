@@ -182,6 +182,36 @@ describe('run()', () => {
     expect(mockCreateComment).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['roast me', 'space variant'],
+    ['roastme', 'no separator'],
+    ['ROAST-ME', 'uppercase'],
+    ['Roast_Me', 'underscore variant'],
+  ])('triggers roast mode for label "%s" (%s)', async (labelName) => {
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const octokit = makeOctokit({ createComment: mockCreateComment });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate: makeLLMCreate('roast content here') }));
+    vi.doMock('@actions/core', () => makeCoreMock({ roast_label: 'roast-me' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: {
+          pull_request: { number: 1, title: 'T', labels: [{ name: labelName }] },
+          action: 'opened',
+        },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    expect(mockCreateComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('🔥 **Code Roast**') }),
+    );
+  });
+
   it('calls setFailed with the error message when run() throws', async () => {
     const llmCreate = vi.fn().mockRejectedValue(new Error('API exploded'));
     const octokit = makeOctokit();

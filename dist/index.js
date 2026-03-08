@@ -35802,16 +35802,20 @@ async function run() {
     const { owner, repo } = ctx.repo;
     const prNumber = pr.number;
     const action = ctx.payload.action;
+    // Normalize a label for comparison: lowercase and collapse hyphens/spaces/underscores.
+    // This lets "roast-me", "roast me", and "roastme" all match each other.
+    const normalizeLabel = (s) => s.toLowerCase().replace(/[\s\-_]+/g, '');
+    const normalizedRoastLabel = normalizeLabel(roastLabel);
     if (action === 'labeled') {
         const appliedLabel = ctx.payload.label?.name;
-        if (appliedLabel !== roastLabel) {
+        if (normalizeLabel(appliedLabel ?? '') !== normalizedRoastLabel) {
             core.info(`Label event for "${appliedLabel ?? 'unknown'}" does not match roast label "${roastLabel}". Skipping.`);
             return;
         }
     }
     core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
-    const labels = (pr.labels ?? []).map((l) => (l.name ?? '').toLowerCase());
-    const effectiveFormat = labels.includes(roastLabel.toLowerCase()) ? 'roast' : format;
+    const labels = (pr.labels ?? []).map((l) => normalizeLabel(l.name ?? ''));
+    const effectiveFormat = labels.includes(normalizedRoastLabel) ? 'roast' : format;
     if (effectiveFormat === 'roast') {
         core.info(`${roastLabel} label detected — switching to roast mode`);
     }
