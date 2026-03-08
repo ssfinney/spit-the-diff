@@ -35734,6 +35734,8 @@ Rules:
 - Do not include a title or header, just the roast
 
 ${context}`;
+        default:
+            throw new Error(`Unknown format: "${format}". Must be one of: rap, haiku, roast`);
     }
 }
 function summarizeDiff(rawDiff, filesChanged) {
@@ -35796,7 +35798,13 @@ async function postComment(octokit, owner, repo, prNumber, format, content) {
     });
 }
 async function run() {
-    const format = (core.getInput('format') || 'rap');
+    const formatInput = core.getInput('format') || 'rap';
+    const validFormats = ['rap', 'haiku', 'roast'];
+    if (!validFormats.includes(formatInput)) {
+        core.setFailed(`Invalid format "${formatInput}". Must be one of: rap, haiku, roast`);
+        return;
+    }
+    const format = formatInput;
     const model = core.getInput('model') || 'gpt-4o-mini';
     const maxLines = parseInt(core.getInput('max_lines') || '8', 10);
     const tone = core.getInput('tone') || 'friendly';

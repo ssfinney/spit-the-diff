@@ -67,6 +67,9 @@ Rules:
 - Do not include a title or header, just the roast
 
 ${context}`;
+
+    default:
+      throw new Error(`Unknown format: "${format}". Must be one of: rap, haiku, roast`);
   }
 }
 
@@ -154,7 +157,13 @@ async function postComment(
 }
 
 async function run(): Promise<void> {
-  const format = (core.getInput('format') || 'rap') as Format;
+  const formatInput = core.getInput('format') || 'rap';
+  const validFormats: Format[] = ['rap', 'haiku', 'roast'];
+  if (!validFormats.includes(formatInput as Format)) {
+    core.setFailed(`Invalid format "${formatInput}". Must be one of: rap, haiku, roast`);
+    return;
+  }
+  const format = formatInput as Format;
   const model = core.getInput('model') || 'gpt-4o-mini';
   const maxLines = parseInt(core.getInput('max_lines') || '8', 10);
   const tone = core.getInput('tone') || 'friendly';
