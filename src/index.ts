@@ -309,7 +309,6 @@ async function callLLM(apiKey: string, model: string, prompt: string): Promise<s
     model,
     messages: [{ role: 'user', content: prompt }],
     max_completion_tokens: 300,
-    temperature: 0.85,
   });
 
   const text = response.choices[0]?.message?.content?.trim();
