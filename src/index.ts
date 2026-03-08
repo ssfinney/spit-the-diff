@@ -4,29 +4,22 @@ import OpenAI from 'openai';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { buildCompressedDiffPayload, PRFile } from './diffCompression';
 
 type Format = 'rap' | 'haiku' | 'roast';
 type ProfanityFilterMode = 'on' | 'off';
-
-interface PRFile {
-  filename: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  patch?: string;
-}
 
 interface PRSummary {
   title: string;
   body: string;
   files: PRFile[];
   filesText: string;
+  symbolsText: string;
   diffPayload: string;
+  isTinyPullRequest: boolean;
 }
 
-const MAX_PROMPT_DIFF_CHARS = 30000;
 const DEFAULT_TOP_FILES = 6;
-const DEFAULT_MAX_PATCH_LINES = 60;
 
 const TEMPLATE_BY_FORMAT: Record<Format, string> = {
   rap: 'rap.txt',
@@ -85,58 +78,6 @@ function loadPromptTemplate(format: Format): string {
   }
 }
 
-function formatFilesList(files: PRFile[]): string {
-  if (files.length === 0) {
-    return '(no changed files found)';
-  }
-
-  return files
-    .map(file => `${file.filename} | ${file.status} | +${file.additions}/-${file.deletions}`)
-    .join('\n');
-}
-
-function truncatePatchLines(patch: string, maxLines: number): string {
-  const lines = patch.split('\n');
-  if (lines.length <= maxLines) {
-    return patch;
-  }
-
-  return `${lines.slice(0, maxLines).join('\n')}\n...[truncated ${lines.length - maxLines} more lines]`;
-}
-
-function buildCompressedDiff(files: PRFile[], topN = DEFAULT_TOP_FILES, maxPatchLines = DEFAULT_MAX_PATCH_LINES): string {
-  const ranked = [...files]
-    .sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions) || a.filename.localeCompare(b.filename))
-    .slice(0, topN);
-
-  const changeSummaryLines = ranked.map(
-    file => `${file.filename} | status=${file.status} | +${file.additions}/-${file.deletions}`
-  );
-
-  const summarySection = ['Change Summary:', ...changeSummaryLines].join('\n');
-
-  const hunks: string[] = [];
-  for (const file of ranked) {
-    if (!file.patch) {
-      continue;
-    }
-
-    hunks.push(`File: ${file.filename}`);
-    hunks.push(truncatePatchLines(file.patch, maxPatchLines));
-  }
-
-  if (hunks.length === 0) {
-    return summarySection;
-  }
-
-  const fullPayload = `${summarySection}\n\nSelected Diff Hunks (truncated):\n${hunks.join('\n\n')}`;
-  if (fullPayload.length > MAX_PROMPT_DIFF_CHARS) {
-    return summarySection;
-  }
-
-  return fullPayload;
-}
-
 function buildPrompt(format: Format, summary: PRSummary): string {
   const template = loadPromptTemplate(format);
 
@@ -144,6 +85,8 @@ function buildPrompt(format: Format, summary: PRSummary): string {
     .replace('{title}', summary.title)
     .replace('{body}', summary.body || '(none)')
     .replace('{files}', summary.filesText)
+    .replace('{symbols}', summary.symbolsText || '(none)')
+    .replace('{tiny_pr}', summary.isTinyPullRequest ? 'yes' : 'no')
     .replace('{diff}', summary.diffPayload);
 }
 
@@ -207,6 +150,8 @@ function buildInputHash(format: Format, model: string, summary: PRSummary): stri
     title: summary.title,
     body: summary.body,
     filesText: summary.filesText,
+    symbolsText: summary.symbolsText,
+    isTinyPullRequest: summary.isTinyPullRequest,
     diffPayload: summary.diffPayload,
   });
 
@@ -301,12 +246,16 @@ async function fetchPRData(
     patch: file.patch,
   }));
 
+  const compressed = buildCompressedDiffPayload(normalizedFiles, { maxSelectedFiles: maxFiles });
+
   return {
     title: pr.title,
     body: pr.body ?? '',
     files: normalizedFiles,
-    filesText: formatFilesList(normalizedFiles),
-    diffPayload: buildCompressedDiff(normalizedFiles, maxFiles),
+    filesText: compressed.filesSummary,
+    symbolsText: compressed.symbolSummary,
+    diffPayload: compressed.diffExcerpt || '(diff excerpt omitted due to size budget)',
+    isTinyPullRequest: compressed.isTinyPullRequest,
   };
 }
 

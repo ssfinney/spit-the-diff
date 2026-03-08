@@ -22,5 +22,10 @@ PR Description: {body}
 Files changed:
 {files}
 
+Key symbols touched:
+{symbols}
+
+Tiny PR candidate: {tiny_pr}
+
 Diff excerpt:
 {diff}

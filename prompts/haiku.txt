@@ -12,7 +12,13 @@ If the diff is large, prioritize the PR title and description.
 
 PR Title: {title}
 PR Description: {body}
-Files changed: {files}
+Files changed:
+{files}
+
+Key symbols touched:
+{symbols}
+
+Tiny PR candidate: {tiny_pr}
 
 Diff excerpt:
 {diff}

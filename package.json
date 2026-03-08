@@ -5,7 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc && ncc build src/index.ts -o dist --source-map --license licenses.txt",
-    "build:watch": "tsc --watch"
+    "build:watch": "tsc --watch",
+    "test": "npm run build && node tests/diffCompression.test.js"
   },
   "keywords": [
     "github-action",

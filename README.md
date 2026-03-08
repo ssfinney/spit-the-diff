@@ -146,11 +146,16 @@ Roasts target code quality and patterns — never the developer.
 The action builds prompts in a deterministic order to reduce token usage:
 
 1. PR title + description
-2. Structured file list (`filename | status | +additions/-deletions`)
-3. Compressed diff payload:
-   - `Change Summary` for top churn files
-   - `Selected Diff Hunks (truncated)` for top files, capped per file
-   - For very large PRs, only `Change Summary` is sent
+2. Ranked files changed summary (`path (+additions / -deletions) status`)
+3. Key symbols touched (from changed lines only)
+4. Representative diff excerpts (1-2 hunks per selected file, line-capped)
+
+Compression behavior:
+
+- Files are ranked by `additions + deletions` and the top files are selected (`max_files`, default `6`).
+- Low-value files are ignored before ranking (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `dist/**`, `coverage/**`, `*.map`, `*.min.js`).
+- If payload size exceeds a char budget, diff excerpts are dropped while file + symbol summaries are preserved.
+- Tiny PR state is computed and included in prompts for future 2-line "mic drop" formatting.
 
 Output cleanup guardrails are applied before commenting:
 
