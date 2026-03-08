@@ -8,7 +8,7 @@ branding:
 
 inputs:
   format:
-    description: 'Output format: rap or haiku. Roast mode is enabled only when the roast label is present.'
+    description: 'Output format: rap, haiku, or roast. The roast label also triggers roast mode automatically.'
     required: false
     default: 'rap'
 

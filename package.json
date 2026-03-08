@@ -5,9 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc && ncc build src/index.ts -o dist --source-map --license licenses.txt",
-    "build:watch": "tsc --watch",
-    "lint": "eslint src/**/*.ts",
-    "format": "prettier --write src/**/*.ts"
+    "build:watch": "tsc --watch"
   },
   "keywords": [
     "github-action",
