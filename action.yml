@@ -46,6 +46,10 @@ inputs:
     required: false
     default: 'https://www.purgomalum.com'
 
+outputs:
+  content:
+    description: 'The generated creative summary text'
+
 runs:
   using: 'node20'
   main: 'dist/index.js'

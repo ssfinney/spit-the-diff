@@ -35966,7 +35966,8 @@ async function run() {
         core.info(`${roastLabel} label detected — switching to roast mode`);
     }
     core.info('Fetching PR metadata and file patches...');
-    const maxFiles = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
+    const maxFilesRaw = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
+    const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : DEFAULT_TOP_FILES;
     const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
     const inputHash = buildInputHash(effectiveFormat, model, summary);
     const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
@@ -36003,6 +36004,7 @@ async function run() {
     }
     core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
     await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, sanitized.text, inputHash, existingComment);
+    core.setOutput('content', sanitized.text);
     core.info('Done!');
 }
 run().catch(err => {
