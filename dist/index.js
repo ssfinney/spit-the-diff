@@ -35900,7 +35900,6 @@ async function callLLM(apiKey, model, prompt) {
     const response = await client.chat.completions.create({
         model,
         messages: [{ role: 'user', content: prompt }],
-        max_completion_tokens: 300,
     });
     const text = response.choices[0]?.message?.content?.trim();
     if (!text) {
