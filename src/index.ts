@@ -171,8 +171,13 @@ function removeLeadingMetaLine(line: string): string {
   return trimmed.replace(/^[-*]+\s*/, '');
 }
 
+function normalizeUnicode(text: string): string {
+  // Replace runs of non-ASCII, non-emoji punctuation/symbols with an em dash
+  return text.replace(/[^\x00-\x7F\u2000-\u206F\u2600-\u27BF\uFE00-\uFEFF\u{1F000}-\u{1FFFF}]+/gu, '—');
+}
+
 function sanitizeOutput(format: Format, rawText: string): { text: string; needsHaikuRetry: boolean } {
-  const cleanedLines = rawText
+  const cleanedLines = normalizeUnicode(rawText)
     .split('\n')
     .map(removeLeadingMetaLine)
     .filter(Boolean);
@@ -310,7 +315,9 @@ async function callLLM(apiKey: string, model: string, prompt: string): Promise<s
     messages: [{ role: 'user', content: prompt }],
   });
 
-  const text = response.choices[0]?.message?.content?.trim();
+  const choice = response.choices[0];
+  core.info(`LLM finish_reason: ${choice?.finish_reason ?? 'unknown'}`);
+  const text = choice?.message?.content?.trim();
   if (!text) {
     throw new Error('LLM returned an empty response');
   }
