@@ -93,10 +93,11 @@ When a PR contains the label `roast-me`, the bot switches to playful roast mode.
 
 | Input | Description | Default |
 |-------|-------------|---------|
-| `format` | Output format (`rap`, `haiku`) | `rap` |
-| `model` | AI model to use | `gpt-4o-mini` |
-| `max_lines` | Maximum output length | `8` |
-| `tone` | Output tone (`friendly`, `playful`) | `friendly` |
+| `format` | Output format (`rap`, `haiku`, `roast`) | `rap` |
+| `model` | AI model to use | `gpt-4.1-mini` |
+| `max_files` | Max changed files included in the diff payload | `6` |
+| `roast_label` | PR label that enables roast mode | `roast-me` |
+| `enable_moderation` | Run OpenAI moderation on output before posting | `true` |
 | `openai_api_key` | OpenAI API key | required |
 | `github_token` | GitHub token for posting comments | `${{ github.token }}` |
 
@@ -106,7 +107,7 @@ When a PR contains the label `roast-me`, the bot switches to playful roast mode.
 uses: ssfinney/spit-the-diff@v1
 with:
   format: rap
-  model: gpt-4o-mini
+  model: gpt-4.1-mini
   openai_api_key: ${{ secrets.OPENAI_API_KEY }}
 ```
 
@@ -223,7 +224,7 @@ Estimated cost per PR: fractions of a cent.
 
 The system:
 - avoids harassment
-- avoids profanity by default
+- avoids profanity (enforced via OpenAI moderation API, enabled by default)
 - avoids personal attacks
 
 Roasts must target code quality only.

@@ -27,6 +27,11 @@ inputs:
     required: false
     default: 'roast-me'
 
+  enable_moderation:
+    description: 'Run OpenAI moderation on generated output before posting. Set to false to disable.'
+    required: false
+    default: 'true'
+
   openai_api_key:
     description: 'OpenAI API key for LLM calls'
     required: true
@@ -35,16 +40,6 @@ inputs:
     description: 'GitHub token used to post PR comments'
     required: false
     default: ${{ github.token }}
-
-  profanity_filter:
-    description: 'Profanity filter mode: off or on (uses PurgoMalum API when on)'
-    required: false
-    default: 'on'
-
-  profanity_api_base_url:
-    description: 'Base URL for profanity API provider (PurgoMalum-compatible)'
-    required: false
-    default: 'https://www.purgomalum.com'
 
 outputs:
   content:

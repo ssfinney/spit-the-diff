@@ -35683,54 +35683,249 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const openai_1 = __importDefault(__nccwpck_require__(2583));
+const lib_1 = __nccwpck_require__(5704);
+async function findExistingBotComment(octokit, owner, repo, prNumber) {
+    const comments = await octokit.paginate(octokit.rest.issues.listComments, {
+        owner,
+        repo,
+        issue_number: prNumber,
+        per_page: 100,
+    });
+    for (const comment of comments) {
+        const body = comment.body ?? '';
+        const markerMatch = body.match(lib_1.COMMENT_MARKER_REGEX);
+        if (!markerMatch) {
+            continue;
+        }
+        return {
+            id: comment.id,
+            hash: markerMatch[1],
+        };
+    }
+    return null;
+}
+async function moderateText(client, text) {
+    const result = await client.moderations.create({ input: text });
+    return result.results[0]?.flagged ?? false;
+}
+async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = lib_1.DEFAULT_TOP_FILES) {
+    const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+    const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
+        owner,
+        repo,
+        pull_number: prNumber,
+        per_page: 100,
+    });
+    const normalizedFiles = files.map(file => ({
+        filename: file.filename,
+        status: file.status,
+        additions: file.additions,
+        deletions: file.deletions,
+        patch: file.patch,
+    }));
+    return {
+        title: pr.title,
+        body: pr.body ?? '',
+        files: normalizedFiles,
+        filesText: (0, lib_1.formatFilesList)(normalizedFiles),
+        diffPayload: (0, lib_1.buildCompressedDiff)(normalizedFiles, maxFiles),
+    };
+}
+async function callLLM(client, model, prompt) {
+    const response = await client.chat.completions.create({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+    });
+    const choice = response.choices[0];
+    core.info(`LLM finish_reason: ${choice?.finish_reason ?? 'unknown'}`);
+    const text = choice?.message?.content?.trim();
+    if (!text) {
+        throw new Error('LLM returned an empty response');
+    }
+    return text;
+}
+async function upsertComment(octokit, owner, repo, prNumber, format, content, inputHash, existingComment) {
+    const body = (0, lib_1.buildCommentBody)(format, content, inputHash);
+    if (existingComment) {
+        await octokit.rest.issues.updateComment({
+            owner,
+            repo,
+            comment_id: existingComment.id,
+            body,
+        });
+        return;
+    }
+    await octokit.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+}
+async function run() {
+    const format = (0, lib_1.parseFormat)(core.getInput('format') || 'rap');
+    const model = core.getInput('model') || 'gpt-4.1-mini';
+    const openaiApiKey = core.getInput('openai_api_key');
+    const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
+    const roastLabel = core.getInput('roast_label') || 'roast-me';
+    const enableModeration = core.getInput('enable_moderation') !== 'false';
+    if (!openaiApiKey) {
+        core.setFailed('openai_api_key input is required');
+        return;
+    }
+    if (!githubToken) {
+        core.setFailed('github_token is required (or GITHUB_TOKEN env var)');
+        return;
+    }
+    const ctx = github.context;
+    const pr = ctx.payload.pull_request;
+    if (!pr) {
+        core.setFailed('This action only runs on pull_request events');
+        return;
+    }
+    const octokit = github.getOctokit(githubToken);
+    const client = new openai_1.default({ apiKey: openaiApiKey });
+    const { owner, repo } = ctx.repo;
+    const prNumber = pr.number;
+    const action = ctx.payload.action;
+    if (action === 'labeled') {
+        const appliedLabel = ctx.payload.label?.name;
+        if (appliedLabel !== roastLabel) {
+            core.info(`Label event for "${appliedLabel ?? 'unknown'}" does not match roast label "${roastLabel}". Skipping.`);
+            return;
+        }
+    }
+    core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
+    const labels = (pr.labels ?? []).map((l) => l.name ?? '');
+    const effectiveFormat = labels.includes(roastLabel) ? 'roast' : format;
+    if (effectiveFormat === 'roast') {
+        core.info(`${roastLabel} label detected — switching to roast mode`);
+    }
+    core.info('Fetching PR metadata and file patches...');
+    const maxFilesRaw = parseInt(core.getInput('max_files') || String(lib_1.DEFAULT_TOP_FILES), 10);
+    const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : lib_1.DEFAULT_TOP_FILES;
+    const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
+    const inputHash = (0, lib_1.buildInputHash)(effectiveFormat, model, summary);
+    const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
+    if (action === 'synchronize' && existingComment?.hash === inputHash) {
+        core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
+        return;
+    }
+    core.info(`Building ${effectiveFormat} prompt...`);
+    const prompt = (0, lib_1.buildPrompt)(effectiveFormat, summary);
+    core.info(`Calling ${model}...`);
+    let creative = await callLLM(client, model, prompt);
+    let sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+    if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
+        core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
+        const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
+        creative = await callLLM(client, model, retryPrompt);
+        sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+        if (sanitized.needsHaikuRetry) {
+            sanitized = { text: sanitized.text, needsHaikuRetry: false };
+        }
+    }
+    let finalText = sanitized.text;
+    if (enableModeration) {
+        core.info('Running moderation check...');
+        const flagged = await moderateText(client, finalText);
+        if (flagged) {
+            core.warning('First attempt flagged by moderation. Retrying...');
+            creative = await callLLM(client, model, prompt);
+            sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+            const flaggedAgain = await moderateText(client, sanitized.text);
+            if (flaggedAgain) {
+                core.warning('Second attempt also flagged by moderation. Using fallback message.');
+                finalText = lib_1.MODERATION_FALLBACK;
+            }
+            else {
+                finalText = sanitized.text;
+            }
+        }
+    }
+    core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
+    await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, finalText, inputHash, existingComment);
+    core.setOutput('content', finalText);
+    core.info('Done!');
+}
+run().catch(err => {
+    core.setFailed(err instanceof Error ? err.message : String(err));
+});
+
+
+/***/ }),
+
+/***/ 5704:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = void 0;
+exports.parseFormat = parseFormat;
+exports.formatFilesList = formatFilesList;
+exports.truncatePatchLines = truncatePatchLines;
+exports.buildCompressedDiff = buildCompressedDiff;
+exports.buildPrompt = buildPrompt;
+exports.removeLeadingMetaLine = removeLeadingMetaLine;
+exports.normalizeUnicode = normalizeUnicode;
+exports.sanitizeOutput = sanitizeOutput;
+exports.buildInputHash = buildInputHash;
+exports.buildCommentBody = buildCommentBody;
+const core = __importStar(__nccwpck_require__(7484));
 const crypto_1 = __nccwpck_require__(6982);
-const fs = __importStar(__nccwpck_require__(9896));
-const path = __importStar(__nccwpck_require__(6928));
-const MAX_PROMPT_DIFF_CHARS = 30000;
-const DEFAULT_TOP_FILES = 6;
-const DEFAULT_MAX_PATCH_LINES = 60;
-const TEMPLATE_BY_FORMAT = {
-    rap: 'rap.txt',
-    haiku: 'haiku.txt',
-    roast: 'roast.txt',
-};
-const MAX_LINES_BY_FORMAT = {
+const prompts_1 = __nccwpck_require__(6224);
+exports.MAX_PROMPT_DIFF_CHARS = 30000;
+exports.DEFAULT_TOP_FILES = 6;
+exports.DEFAULT_MAX_PATCH_LINES = 60;
+exports.MAX_LINES_BY_FORMAT = {
     rap: 8,
     haiku: 3,
     roast: 6,
 };
-const COMMENT_MARKER_KEY = 'spit-the-diff';
-const COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\s*-->/i;
-const VALID_FORMATS = ['rap', 'haiku', 'roast'];
-const COMMENT_HEADERS = {
+exports.COMMENT_MARKER_KEY = 'spit-the-diff';
+exports.COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\s*-->/i;
+exports.VALID_FORMATS = ['rap', 'haiku', 'roast'];
+exports.COMMENT_HEADERS = {
     rap: '🎤 **Diff Cypher**',
     haiku: '🌸 **Diff Haiku**',
     roast: '🔥 **Code Roast**',
 };
-const VALID_PROFANITY_MODES = ['on', 'off'];
+exports.MODERATION_FALLBACK = '_The generated content did not pass moderation. Try again._';
 function parseFormat(input, fallback = 'rap') {
-    if (VALID_FORMATS.includes(input)) {
+    if (exports.VALID_FORMATS.includes(input)) {
         return input;
     }
     core.warning(`Invalid format "${input}" supplied. Falling back to "${fallback}".`);
     return fallback;
-}
-function parseProfanityFilterMode(input, fallback = 'on') {
-    if (VALID_PROFANITY_MODES.includes(input)) {
-        return input;
-    }
-    core.warning(`Invalid profanity_filter value "${input}" supplied. Falling back to "${fallback}".`);
-    return fallback;
-}
-function loadPromptTemplate(format) {
-    const templatePath = path.resolve(__dirname, '..', 'prompts', TEMPLATE_BY_FORMAT[format]);
-    try {
-        return fs.readFileSync(templatePath, 'utf8').trim();
-    }
-    catch {
-        throw new Error(`Could not load prompt template for format "${format}" at ${templatePath}. ` +
-            `Ensure the prompts/ directory is present alongside dist/.`);
-    }
 }
 function formatFilesList(files) {
     if (files.length === 0) {
@@ -35747,7 +35942,7 @@ function truncatePatchLines(patch, maxLines) {
     }
     return `${lines.slice(0, maxLines).join('\n')}\n...[truncated ${lines.length - maxLines} more lines]`;
 }
-function buildCompressedDiff(files, topN = DEFAULT_TOP_FILES, maxPatchLines = DEFAULT_MAX_PATCH_LINES) {
+function buildCompressedDiff(files, topN = exports.DEFAULT_TOP_FILES, maxPatchLines = exports.DEFAULT_MAX_PATCH_LINES) {
     const ranked = [...files]
         .sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions) || a.filename.localeCompare(b.filename))
         .slice(0, topN);
@@ -35765,14 +35960,13 @@ function buildCompressedDiff(files, topN = DEFAULT_TOP_FILES, maxPatchLines = DE
         return summarySection;
     }
     const fullPayload = `${summarySection}\n\nSelected Diff Hunks (truncated):\n${hunks.join('\n\n')}`;
-    if (fullPayload.length > MAX_PROMPT_DIFF_CHARS) {
+    if (fullPayload.length > exports.MAX_PROMPT_DIFF_CHARS) {
         return summarySection;
     }
     return fullPayload;
 }
 function buildPrompt(format, summary) {
-    const template = loadPromptTemplate(format);
-    return template
+    return prompts_1.TEMPLATES[format]
         .replace('{title}', summary.title)
         .replace('{body}', summary.body || '(none)')
         .replace('{files}', summary.filesText)
@@ -35809,7 +36003,7 @@ function sanitizeOutput(format, rawText) {
         .split('\n')
         .map(removeLeadingMetaLine)
         .filter(Boolean);
-    const maxLines = MAX_LINES_BY_FORMAT[format];
+    const maxLines = exports.MAX_LINES_BY_FORMAT[format];
     let lines = cleanedLines;
     if (format === 'haiku') {
         lines = lines.slice(0, 3);
@@ -35834,185 +36028,83 @@ function buildInputHash(format, model, summary) {
     return (0, crypto_1.createHash)('sha256').update(payload).digest('hex');
 }
 function buildCommentBody(format, content, inputHash) {
-    const marker = `<!-- ${COMMENT_MARKER_KEY}:hash=${inputHash} -->`;
-    const header = COMMENT_HEADERS[format];
+    const marker = `<!-- ${exports.COMMENT_MARKER_KEY}:hash=${inputHash} -->`;
+    const header = exports.COMMENT_HEADERS[format];
     return `${marker}\n${header}\n\n${content}\n\n---\n*Generated by [spit-the-diff](https://github.com/ssfinney/spit-the-diff)*`;
 }
-async function findExistingBotComment(octokit, owner, repo, prNumber) {
-    const comments = await octokit.paginate(octokit.rest.issues.listComments, {
-        owner,
-        repo,
-        issue_number: prNumber,
-        per_page: 100,
-    });
-    for (const comment of comments) {
-        const body = comment.body ?? '';
-        const markerMatch = body.match(COMMENT_MARKER_REGEX);
-        if (!markerMatch) {
-            continue;
-        }
-        return {
-            id: comment.id,
-            hash: markerMatch[1],
-        };
-    }
-    return null;
-}
-async function applyProfanityFilter(text, baseUrl) {
-    const endpoint = new URL('/service/json', baseUrl);
-    endpoint.searchParams.set('text', text);
-    endpoint.searchParams.set('fill_char', '*');
-    const response = await fetch(endpoint, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) {
-        throw new Error(`PurgoMalum request failed with status ${response.status}`);
-    }
-    const payload = (await response.json());
-    if (typeof payload.result !== 'string') {
-        throw new Error('PurgoMalum response missing result field');
-    }
-    return {
-        text: payload.result,
-        detected: payload.result !== text,
-        skipped: false,
-    };
-}
-async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = DEFAULT_TOP_FILES) {
-    const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-    const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
-        owner,
-        repo,
-        pull_number: prNumber,
-        per_page: 100,
-    });
-    const normalizedFiles = files.map(file => ({
-        filename: file.filename,
-        status: file.status,
-        additions: file.additions,
-        deletions: file.deletions,
-        patch: file.patch,
-    }));
-    return {
-        title: pr.title,
-        body: pr.body ?? '',
-        files: normalizedFiles,
-        filesText: formatFilesList(normalizedFiles),
-        diffPayload: buildCompressedDiff(normalizedFiles, maxFiles),
-    };
-}
-async function callLLM(apiKey, model, prompt) {
-    const client = new openai_1.default({ apiKey });
-    const response = await client.chat.completions.create({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-    });
-    const choice = response.choices[0];
-    core.info(`LLM finish_reason: ${choice?.finish_reason ?? 'unknown'}`);
-    const text = choice?.message?.content?.trim();
-    if (!text) {
-        throw new Error('LLM returned an empty response');
-    }
-    return text;
-}
-async function upsertComment(octokit, owner, repo, prNumber, format, content, inputHash, existingComment) {
-    const body = buildCommentBody(format, content, inputHash);
-    if (existingComment) {
-        await octokit.rest.issues.updateComment({
-            owner,
-            repo,
-            comment_id: existingComment.id,
-            body,
-        });
-        return;
-    }
-    await octokit.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
-}
-async function run() {
-    const format = parseFormat(core.getInput('format') || 'rap');
-    const model = core.getInput('model') || 'gpt-4o-mini';
-    const openaiApiKey = core.getInput('openai_api_key');
-    const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
-    const roastLabel = core.getInput('roast_label') || 'roast-me';
-    const profanityFilterMode = parseProfanityFilterMode(core.getInput('profanity_filter') || 'on');
-    const profanityApiBaseUrl = core.getInput('profanity_api_base_url') || 'https://www.purgomalum.com';
-    if (!openaiApiKey) {
-        core.setFailed('openai_api_key input is required');
-        return;
-    }
-    if (!githubToken) {
-        core.setFailed('github_token is required (or GITHUB_TOKEN env var)');
-        return;
-    }
-    const ctx = github.context;
-    const pr = ctx.payload.pull_request;
-    if (!pr) {
-        core.setFailed('This action only runs on pull_request events');
-        return;
-    }
-    const octokit = github.getOctokit(githubToken);
-    const { owner, repo } = ctx.repo;
-    const prNumber = pr.number;
-    const action = ctx.payload.action;
-    if (action === 'labeled') {
-        const appliedLabel = ctx.payload.label?.name;
-        if (appliedLabel !== roastLabel) {
-            core.info(`Label event for "${appliedLabel ?? 'unknown'}" does not match roast label "${roastLabel}". Skipping.`);
-            return;
-        }
-    }
-    core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
-    const labels = (pr.labels ?? []).map((l) => l.name ?? '');
-    const effectiveFormat = labels.includes(roastLabel) ? 'roast' : format;
-    if (effectiveFormat === 'roast') {
-        core.info(`${roastLabel} label detected — switching to roast mode`);
-    }
-    core.info('Fetching PR metadata and file patches...');
-    const maxFilesRaw = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
-    const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : DEFAULT_TOP_FILES;
-    const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
-    const inputHash = buildInputHash(effectiveFormat, model, summary);
-    const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
-    if (action === 'synchronize' && existingComment?.hash === inputHash) {
-        core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
-        return;
-    }
-    core.info(`Building ${effectiveFormat} prompt...`);
-    const prompt = buildPrompt(effectiveFormat, summary);
-    core.info(`Calling ${model}...`);
-    let creative = await callLLM(openaiApiKey, model, prompt);
-    let sanitized = sanitizeOutput(effectiveFormat, creative);
-    if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
-        core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
-        const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
-        creative = await callLLM(openaiApiKey, model, retryPrompt);
-        sanitized = sanitizeOutput(effectiveFormat, creative);
-        if (sanitized.needsHaikuRetry) {
-            const padded = sanitized.text ? `${sanitized.text}\n\n` : '\n\n';
-            sanitized = { text: padded.split('\n').slice(0, 3).join('\n'), needsHaikuRetry: false };
-        }
-    }
-    if (profanityFilterMode === 'on') {
-        try {
-            const filtered = await applyProfanityFilter(sanitized.text, profanityApiBaseUrl);
-            if (filtered.detected) {
-                core.info('Profanity detected by PurgoMalum; applying censored output.');
-            }
-            sanitized = sanitizeOutput(effectiveFormat, filtered.text);
-        }
-        catch (error) {
-            core.warning(`profanity_filter=on but PurgoMalum check failed (${error instanceof Error ? error.message : String(error)}). Posting uncensored output.`);
-        }
-    }
-    core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
-    await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, sanitized.text, inputHash, existingComment);
-    core.setOutput('content', sanitized.text);
-    core.info('Done!');
-}
-run().catch(err => {
-    core.setFailed(err instanceof Error ? err.message : String(err));
-});
+
+
+/***/ }),
+
+/***/ 6224:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Prompt templates are defined here so they are bundled into dist/index.js at
+// compile time. There is no runtime filesystem dependency on prompts/*.txt.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.TEMPLATES = void 0;
+exports.TEMPLATES = {
+    rap: `You are a creative hip-hop lyricist. Write a short rap verse summarizing this GitHub pull request.
+
+Requirements:
+- Maximum 8 lines
+- Use rhyme and rhythm
+- Mention important files, functions, or modules when possible
+- Prefer mentioning specific files or modules over generic descriptions
+- Keep the tone humorous but respectful
+- No profanity
+- Do not use bullet points or numbering
+- Output only the verse, no title or explanation
+
+If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed: {files}
+
+Diff excerpt:
+{diff}`,
+    haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
+
+Rules:
+- Exactly 3 lines
+- Approximate 5-7-5 syllable structure
+- Focus on the main code change
+- Mention a file, function, or module if relevant
+- No title or explanation
+- Output only the 3 lines
+
+If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed: {files}
+
+Diff excerpt:
+{diff}`,
+    roast: `You are a playful battle-rap comedian. Write a lighthearted roast of the code changes in this GitHub pull request.
+
+Rules:
+- Roast the code patterns, complexity, or design choices — NOT the developer
+- Keep it playful and funny
+- Maximum 6 lines
+- Mention specific files, functions, or modules when possible
+- No profanity
+- No harassment or personal attacks
+- Do not use bullet points or numbering
+- Output only the roast, no title or explanation
+
+If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed: {files}
+
+Diff excerpt:
+{diff}`,
+};
 
 
 /***/ }),
