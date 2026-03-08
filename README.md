@@ -111,7 +111,7 @@ Do not print the key in logs or echo commands in CI.
 
 | Input | Description | Default |
 |-------|-------------|---------|
-| `format` | Output format: `rap` or `haiku` | `rap` |
+| `format` | Output format: `rap`, `haiku`, or `roast` | `rap` |
 | `model` | OpenAI model to use | `gpt-4.1-mini` |
 | `max_files` | Max changed files included in the diff payload | `6` |
 | `roast_label` | PR label that enables roast mode | `roast-me` |

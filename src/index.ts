@@ -84,6 +84,25 @@ async function fetchPRData(
   };
 }
 
+async function generateWithHaikuRetry(
+  client: OpenAI,
+  model: string,
+  prompt: string,
+  effectiveFormat: Format
+): Promise<string> {
+  let creative = await callLLM(client, model, prompt);
+  let sanitized = sanitizeOutput(effectiveFormat, creative);
+
+  if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
+    core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
+    const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
+    creative = await callLLM(client, model, retryPrompt);
+    sanitized = sanitizeOutput(effectiveFormat, creative);
+  }
+
+  return sanitized.text;
+}
+
 async function callLLM(client: OpenAI, model: string, prompt: string): Promise<string> {
   const response = await client.chat.completions.create({
     model,
@@ -189,34 +208,20 @@ async function run(): Promise<void> {
   const prompt = buildPrompt(effectiveFormat, summary);
 
   core.info(`Calling ${model}...`);
-  let creative = await callLLM(client, model, prompt);
-  let sanitized = sanitizeOutput(effectiveFormat, creative);
-
-  if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
-    core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
-    const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
-    creative = await callLLM(client, model, retryPrompt);
-    sanitized = sanitizeOutput(effectiveFormat, creative);
-    if (sanitized.needsHaikuRetry) {
-      sanitized = { text: sanitized.text, needsHaikuRetry: false };
-    }
-  }
-
-  let finalText = sanitized.text;
+  let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
 
   if (enableModeration) {
     core.info('Running moderation check...');
     const flagged = await moderateText(client, finalText);
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
-      creative = await callLLM(client, model, prompt);
-      sanitized = sanitizeOutput(effectiveFormat, creative);
-      const flaggedAgain = await moderateText(client, sanitized.text);
+      const retryText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
+      const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {
         core.warning('Second attempt also flagged by moderation. Using fallback message.');
         finalText = MODERATION_FALLBACK;
       } else {
-        finalText = sanitized.text;
+        finalText = retryText;
       }
     }
   }
