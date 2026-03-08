@@ -35815,9 +35815,10 @@ function sanitizeOutput(format, rawText) {
     }
     return { text: lines.join('\n').trim(), needsHaikuRetry: false };
 }
-function buildInputHash(format, summary) {
+function buildInputHash(format, model, summary) {
     const payload = JSON.stringify({
         format,
+        model,
         title: summary.title,
         body: summary.body,
         filesText: summary.filesText,
@@ -35871,7 +35872,7 @@ async function applyProfanityFilter(text, baseUrl) {
         skipped: false,
     };
 }
-async function fetchPRData(octokit, owner, repo, prNumber) {
+async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = DEFAULT_TOP_FILES) {
     const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
     const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
         owner,
@@ -35891,7 +35892,7 @@ async function fetchPRData(octokit, owner, repo, prNumber) {
         body: pr.body ?? '',
         files: normalizedFiles,
         filesText: formatFilesList(normalizedFiles),
-        diffPayload: buildCompressedDiff(normalizedFiles),
+        diffPayload: buildCompressedDiff(normalizedFiles, maxFiles),
     };
 }
 async function callLLM(apiKey, model, prompt) {
@@ -35961,8 +35962,9 @@ async function run() {
         core.info(`${roastLabel} label detected — switching to roast mode`);
     }
     core.info('Fetching PR metadata and file patches...');
-    const summary = await fetchPRData(octokit, owner, repo, prNumber);
-    const inputHash = buildInputHash(effectiveFormat, summary);
+    const maxFiles = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
+    const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
+    const inputHash = buildInputHash(effectiveFormat, model, summary);
     const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
     if (action === 'synchronize' && existingComment?.hash === inputHash) {
         core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
