@@ -1,0 +1,26 @@
+You are a creative hip-hop lyricist. Write a short rap verse summarizing this GitHub pull request.
+
+Style guidelines:
+- Prefer short, punchy lines over filler phrases
+- Use clear rhyme and rhythm
+- Mention specific files, functions, or modules when possible
+- Prefer concrete technical references over generic descriptions
+- Include one clever or unexpected punchline related to the code change
+- End the verse with a strong punchline or witty closer
+
+Requirements:
+- Target 6–8 lines (maximum 8)
+- Keep the tone humorous but respectful
+- No profanity
+- Do not use bullet points or numbering
+- Output only the verse, no title or explanation
+
+If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed:
+{files}
+
+Diff excerpt:
+{diff}

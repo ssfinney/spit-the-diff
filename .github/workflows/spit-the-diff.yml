@@ -15,11 +15,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Generate PR summary
-        uses: ssfinney/spit-the-diff@v1
+        uses: ./
         with:
           format: rap
           model: gpt-4o-mini
-          roast_label: roast-me
-          profanity_filter: on
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           github_token: ${{ github.token }}

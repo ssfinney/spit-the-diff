@@ -8,7 +8,7 @@ branding:
 
 inputs:
   format:
-    description: 'Output format: rap, haiku, or roast. The roast-me PR label also triggers roast mode automatically.'
+    description: 'Output format: rap, haiku, or roast. The roast label also triggers roast mode automatically.'
     required: false
     default: 'rap'
 
@@ -17,15 +17,10 @@ inputs:
     required: false
     default: 'gpt-4o-mini'
 
-  max_lines:
-    description: 'Maximum number of lines in the output'
+  roast_label:
+    description: 'PR label that enables roast mode'
     required: false
-    default: '8'
-
-  tone:
-    description: 'Output tone: friendly or playful'
-    required: false
-    default: 'friendly'
+    default: 'roast-me'
 
   openai_api_key:
     description: 'OpenAI API key for LLM calls'
@@ -35,6 +30,16 @@ inputs:
     description: 'GitHub token used to post PR comments'
     required: false
     default: ${{ github.token }}
+
+  profanity_filter:
+    description: 'Profanity filter mode: off or on (uses PurgoMalum API when on)'
+    required: false
+    default: 'on'
+
+  profanity_api_base_url:
+    description: 'Base URL for profanity API provider (PurgoMalum-compatible)'
+    required: false
+    default: 'https://www.purgomalum.com'
 
 runs:
   using: 'node20'

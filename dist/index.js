@@ -35683,94 +35683,203 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const openai_1 = __importDefault(__nccwpck_require__(2583));
-// Maximum diff characters to send to the LLM to keep costs low
-const MAX_DIFF_CHARS = 3000;
-const COMMENT_HEADERS = {
-    rap: '🎤 **Diff Cypher**',
-    haiku: '🌸 **Diff Haiku**',
-    roast: '🔥 **Code Roast**',
+const crypto_1 = __nccwpck_require__(6982);
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const MAX_PROMPT_DIFF_CHARS = 30000;
+const DEFAULT_TOP_FILES = 6;
+const DEFAULT_MAX_PATCH_LINES = 60;
+const TEMPLATE_BY_FORMAT = {
+    rap: 'rap.txt',
+    haiku: 'haiku.txt',
+    roast: 'roast.txt',
 };
-function buildPrompt(format, summary, maxLines, tone) {
-    const toneNote = tone === 'playful' ? 'Use a very playful, exaggerated tone.' : 'Keep the tone humorous but respectful.';
-    const context = `
-PR Title: ${summary.title}
-PR Description: ${summary.body || '(none)'}
-Files changed: ${summary.filesChanged.join(', ') || '(unknown)'}
-
-Diff excerpt:
-${summary.diff}
-`.trim();
-    switch (format) {
-        case 'rap':
-            return `You are a creative hip-hop lyricist. Write a short rap verse summarizing this GitHub pull request.
-
-Requirements:
-- ${maxLines} lines maximum
-- Use rhyme and rhythm
-- Mention the main code changes by name
-- ${toneNote}
-- No profanity
-- Do not include a title or header, just the verse
-
-${context}`;
-        case 'haiku':
-            return `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
-
-Format:
-- Exactly 3 lines
-- Approximate 5-7-5 syllable structure
-- Focus on the main code change
-- Do not include a title or header, just the 3 lines
-
-${context}`;
-        case 'roast':
-            return `You are a playful battle-rap comedian. Write a roast of the code changes in this pull request.
-
-Rules:
-- Roast the code quality, patterns, or complexity — NOT the developer as a person
-- Keep it lighthearted and funny
-- ${maxLines} lines maximum
-- No profanity, no harassment, no personal attacks
-- Do not include a title or header, just the roast
-
-${context}`;
-        default:
-            throw new Error(`Unknown format: "${format}". Must be one of: rap, haiku, roast`);
+const MAX_LINES_BY_FORMAT = {
+    rap: 8,
+    haiku: 3,
+    roast: 6,
+};
+const COMMENT_MARKER_KEY = 'spit-the-diff';
+const COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\s*-->/i;
+const VALID_FORMATS = ['rap', 'haiku', 'roast'];
+const VALID_PROFANITY_MODES = ['on', 'off'];
+function parseFormat(input, fallback = 'rap') {
+    if (VALID_FORMATS.includes(input)) {
+        return input;
     }
+    core.warning(`Invalid format "${input}" supplied. Falling back to "${fallback}".`);
+    return fallback;
 }
-function summarizeDiff(rawDiff, filesChanged) {
-    if (rawDiff.length <= MAX_DIFF_CHARS) {
-        return rawDiff;
+function parseProfanityFilterMode(input, fallback = 'on') {
+    if (VALID_PROFANITY_MODES.includes(input)) {
+        return input;
     }
-    // Truncate large diffs, keeping the beginning which usually has the most signal
-    const truncated = rawDiff.slice(0, MAX_DIFF_CHARS);
-    const lastNewline = truncated.lastIndexOf('\n');
-    const clean = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
-    return `${clean}\n\n[diff truncated — ${filesChanged.length} files changed total]`;
+    core.warning(`Invalid profanity_filter value "${input}" supplied. Falling back to "${fallback}".`);
+    return fallback;
+}
+function loadPromptTemplate(format) {
+    const templatePath = path.resolve(__dirname, '..', 'prompts', TEMPLATE_BY_FORMAT[format]);
+    return fs.readFileSync(templatePath, 'utf8').trim();
+}
+function formatFilesList(files) {
+    if (files.length === 0) {
+        return '(no changed files found)';
+    }
+    return files
+        .map(file => `${file.filename} | ${file.status} | +${file.additions}/-${file.deletions}`)
+        .join('\n');
+}
+function truncatePatchLines(patch, maxLines) {
+    const lines = patch.split('\n');
+    if (lines.length <= maxLines) {
+        return patch;
+    }
+    return `${lines.slice(0, maxLines).join('\n')}\n...[truncated ${lines.length - maxLines} more lines]`;
+}
+function buildCompressedDiff(files, topN = DEFAULT_TOP_FILES, maxPatchLines = DEFAULT_MAX_PATCH_LINES) {
+    const ranked = [...files]
+        .sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions) || a.filename.localeCompare(b.filename))
+        .slice(0, topN);
+    const changeSummaryLines = ranked.map(file => `${file.filename} | status=${file.status} | +${file.additions}/-${file.deletions}`);
+    const summarySection = ['Change Summary:', ...changeSummaryLines].join('\n');
+    const hunks = [];
+    for (const file of ranked) {
+        if (!file.patch) {
+            continue;
+        }
+        hunks.push(`File: ${file.filename}`);
+        hunks.push(truncatePatchLines(file.patch, maxPatchLines));
+    }
+    if (hunks.length === 0) {
+        return summarySection;
+    }
+    const fullPayload = `${summarySection}\n\nSelected Diff Hunks (truncated):\n${hunks.join('\n\n')}`;
+    if (fullPayload.length > MAX_PROMPT_DIFF_CHARS) {
+        return summarySection;
+    }
+    return fullPayload;
+}
+function buildPrompt(format, summary) {
+    const template = loadPromptTemplate(format);
+    return template
+        .replace('{title}', summary.title)
+        .replace('{body}', summary.body || '(none)')
+        .replace('{files}', summary.filesText)
+        .replace('{diff}', summary.diffPayload);
+}
+function removeLeadingMetaLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+        return '';
+    }
+    const normalized = trimmed.toLowerCase();
+    if (normalized.startsWith("here's") ||
+        normalized.startsWith('heres') ||
+        normalized.includes('your rap') ||
+        normalized.includes('your haiku') ||
+        normalized.includes('your roast') ||
+        normalized.startsWith('title:') ||
+        normalized.startsWith('rap:') ||
+        normalized.startsWith('haiku:') ||
+        normalized.startsWith('roast:')) {
+        return '';
+    }
+    return trimmed.replace(/^[-*\d.)\s]+/, '');
+}
+function sanitizeOutput(format, rawText) {
+    const cleanedLines = rawText
+        .split('\n')
+        .map(removeLeadingMetaLine)
+        .filter(Boolean);
+    const maxLines = MAX_LINES_BY_FORMAT[format];
+    let lines = cleanedLines;
+    if (format === 'haiku') {
+        lines = lines.slice(0, 3);
+        if (lines.length < 3) {
+            return { text: lines.join('\n'), needsHaikuRetry: true };
+        }
+    }
+    else {
+        lines = lines.slice(0, maxLines);
+    }
+    return { text: lines.join('\n').trim(), needsHaikuRetry: false };
+}
+function buildInputHash(format, summary) {
+    const payload = JSON.stringify({
+        format,
+        title: summary.title,
+        body: summary.body,
+        filesText: summary.filesText,
+        diffPayload: summary.diffPayload,
+    });
+    return (0, crypto_1.createHash)('sha256').update(payload).digest('hex');
+}
+function buildCommentBody(content, inputHash) {
+    const marker = `<!-- ${COMMENT_MARKER_KEY}:hash=${inputHash} -->`;
+    return `${marker}\n${content}\n\n---\n*Generated by [spit-the-diff](https://github.com/ssfinney/spit-the-diff)*`;
+}
+async function findExistingBotComment(octokit, owner, repo, prNumber) {
+    const comments = await octokit.paginate(octokit.rest.issues.listComments, {
+        owner,
+        repo,
+        issue_number: prNumber,
+        per_page: 100,
+    });
+    for (const comment of comments) {
+        const body = comment.body ?? '';
+        const markerMatch = body.match(COMMENT_MARKER_REGEX);
+        if (!markerMatch) {
+            continue;
+        }
+        return {
+            id: comment.id,
+            hash: markerMatch[1],
+        };
+    }
+    return null;
+}
+async function applyProfanityFilter(text, baseUrl) {
+    const endpoint = new URL('/service/json', baseUrl);
+    endpoint.searchParams.set('text', text);
+    endpoint.searchParams.set('fill_char', '*');
+    const response = await fetch(endpoint, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+        throw new Error(`PurgoMalum request failed with status ${response.status}`);
+    }
+    const payload = (await response.json());
+    if (typeof payload.result !== 'string') {
+        throw new Error('PurgoMalum response missing result field');
+    }
+    return {
+        text: payload.result,
+        detected: payload.result !== text,
+        skipped: false,
+    };
 }
 async function fetchPRData(octokit, owner, repo, prNumber) {
     const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-    // Fetch the diff
-    const { data: diffData } = await octokit.rest.pulls.get({
-        owner,
-        repo,
-        pull_number: prNumber,
-        mediaType: { format: 'diff' },
-    });
-    // Fetch all changed files (paginate so large PRs aren't silently truncated)
     const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
         owner,
         repo,
         pull_number: prNumber,
         per_page: 100,
     });
-    const filesChanged = files.map(f => f.filename);
-    const rawDiff = typeof diffData === 'string' ? diffData : JSON.stringify(diffData);
+    const normalizedFiles = files.map(file => ({
+        filename: file.filename,
+        status: file.status,
+        additions: file.additions,
+        deletions: file.deletions,
+        patch: file.patch,
+    }));
     return {
         title: pr.title,
         body: pr.body ?? '',
-        diff: summarizeDiff(rawDiff, filesChanged),
-        filesChanged,
+        files: normalizedFiles,
+        filesText: formatFilesList(normalizedFiles),
+        diffPayload: buildCompressedDiff(normalizedFiles),
     };
 }
 async function callLLM(apiKey, model, prompt) {
@@ -35787,29 +35896,27 @@ async function callLLM(apiKey, model, prompt) {
     }
     return text;
 }
-async function postComment(octokit, owner, repo, prNumber, format, content) {
-    const header = COMMENT_HEADERS[format];
-    const body = `${header}\n\n${content}\n\n---\n*Generated by [spit-the-diff](https://github.com/ssfinney/spit-the-diff)*`;
-    await octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: prNumber,
-        body,
-    });
-}
-async function run() {
-    const formatInput = core.getInput('format') || 'rap';
-    const validFormats = ['rap', 'haiku', 'roast'];
-    if (!validFormats.includes(formatInput)) {
-        core.setFailed(`Invalid format "${formatInput}". Must be one of: rap, haiku, roast`);
+async function upsertComment(octokit, owner, repo, prNumber, content, inputHash, existingComment) {
+    const body = buildCommentBody(content, inputHash);
+    if (existingComment) {
+        await octokit.rest.issues.updateComment({
+            owner,
+            repo,
+            comment_id: existingComment.id,
+            body,
+        });
         return;
     }
-    const format = formatInput;
+    await octokit.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+}
+async function run() {
+    const format = parseFormat(core.getInput('format') || 'rap');
     const model = core.getInput('model') || 'gpt-4o-mini';
-    const maxLines = parseInt(core.getInput('max_lines') || '8', 10);
-    const tone = core.getInput('tone') || 'friendly';
     const openaiApiKey = core.getInput('openai_api_key');
     const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
+    const roastLabel = core.getInput('roast_label') || 'roast-me';
+    const profanityFilterMode = parseProfanityFilterMode(core.getInput('profanity_filter') || 'on');
+    const profanityApiBaseUrl = core.getInput('profanity_api_base_url') || 'https://www.purgomalum.com';
     if (!openaiApiKey) {
         core.setFailed('openai_api_key input is required');
         return;
@@ -35827,22 +35934,58 @@ async function run() {
     const octokit = github.getOctokit(githubToken);
     const { owner, repo } = ctx.repo;
     const prNumber = pr.number;
-    core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
-    // Detect roast-me label — overrides the format input
-    const labels = (pr.labels ?? []).map((l) => l.name ?? '');
-    const effectiveFormat = labels.includes('roast-me') ? 'roast' : format;
-    if (effectiveFormat === 'roast') {
-        core.info('roast-me label detected — switching to roast mode');
+    const action = ctx.payload.action;
+    if (action === 'labeled') {
+        const appliedLabel = ctx.payload.label?.name;
+        if (appliedLabel !== roastLabel) {
+            core.info(`Label event for "${appliedLabel ?? 'unknown'}" does not match roast label "${roastLabel}". Skipping.`);
+            return;
+        }
     }
-    core.info('Fetching PR diff...');
+    core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
+    const labels = (pr.labels ?? []).map((l) => l.name ?? '');
+    const effectiveFormat = labels.includes(roastLabel) ? 'roast' : format;
+    if (effectiveFormat === 'roast') {
+        core.info(`${roastLabel} label detected — switching to roast mode`);
+    }
+    core.info('Fetching PR metadata and file patches...');
     const summary = await fetchPRData(octokit, owner, repo, prNumber);
+    const inputHash = buildInputHash(effectiveFormat, summary);
+    const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
+    if (action === 'synchronize' && existingComment?.hash === inputHash) {
+        core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
+        return;
+    }
     core.info(`Building ${effectiveFormat} prompt...`);
-    const prompt = buildPrompt(effectiveFormat, summary, maxLines, tone);
+    const prompt = buildPrompt(effectiveFormat, summary);
     core.info(`Calling ${model}...`);
-    const creative = await callLLM(openaiApiKey, model, prompt);
-    core.info('Posting comment to PR...');
-    await postComment(octokit, owner, repo, prNumber, effectiveFormat, creative);
-    core.info('Done! Your diff just dropped bars.');
+    let creative = await callLLM(openaiApiKey, model, prompt);
+    let sanitized = sanitizeOutput(effectiveFormat, creative);
+    if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
+        core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
+        const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
+        creative = await callLLM(openaiApiKey, model, retryPrompt);
+        sanitized = sanitizeOutput(effectiveFormat, creative);
+        if (sanitized.needsHaikuRetry) {
+            const padded = sanitized.text ? `${sanitized.text}\n\n` : '\n\n';
+            sanitized = { text: padded.split('\n').slice(0, 3).join('\n'), needsHaikuRetry: false };
+        }
+    }
+    if (profanityFilterMode === 'on') {
+        try {
+            const filtered = await applyProfanityFilter(sanitized.text, profanityApiBaseUrl);
+            if (filtered.detected) {
+                core.info('Profanity detected by PurgoMalum; applying censored output.');
+            }
+            sanitized = sanitizeOutput(effectiveFormat, filtered.text);
+        }
+        catch (error) {
+            core.warning(`profanity_filter=on but PurgoMalum check failed (${error instanceof Error ? error.message : String(error)}). Posting uncensored output.`);
+        }
+    }
+    core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
+    await upsertComment(octokit, owner, repo, prNumber, sanitized.text, inputHash, existingComment);
+    core.info('Done!');
 }
 run().catch(err => {
     core.setFailed(err instanceof Error ? err.message : String(err));
