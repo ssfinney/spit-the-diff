@@ -1,193 +1,21 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 import OpenAI from 'openai';
-import { createHash } from 'crypto';
-import { TEMPLATES } from './prompts';
-
-type Format = 'rap' | 'haiku' | 'roast';
-
-interface PRFile {
-  filename: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  patch?: string;
-}
-
-interface PRSummary {
-  title: string;
-  body: string;
-  files: PRFile[];
-  filesText: string;
-  diffPayload: string;
-}
-
-const MAX_PROMPT_DIFF_CHARS = 30000;
-const DEFAULT_TOP_FILES = 6;
-const DEFAULT_MAX_PATCH_LINES = 60;
-
-const MAX_LINES_BY_FORMAT: Record<Format, number> = {
-  rap: 8,
-  haiku: 3,
-  roast: 6,
-};
-const COMMENT_MARKER_KEY = 'spit-the-diff';
-const COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\s*-->/i;
-const VALID_FORMATS: readonly Format[] = ['rap', 'haiku', 'roast'];
-
-const COMMENT_HEADERS: Record<Format, string> = {
-  rap: '🎤 **Diff Cypher**',
-  haiku: '🌸 **Diff Haiku**',
-  roast: '🔥 **Code Roast**',
-};
-
-const MODERATION_FALLBACK = '_The generated content did not pass moderation. Try again._';
-
-interface ExistingBotComment {
-  id: number;
-  hash?: string;
-}
-
-function parseFormat(input: string, fallback: Format = 'rap'): Format {
-  if (VALID_FORMATS.includes(input as Format)) {
-    return input as Format;
-  }
-
-  core.warning(`Invalid format "${input}" supplied. Falling back to "${fallback}".`);
-  return fallback;
-}
-
-function formatFilesList(files: PRFile[]): string {
-  if (files.length === 0) {
-    return '(no changed files found)';
-  }
-
-  return files
-    .map(file => `${file.filename} | ${file.status} | +${file.additions}/-${file.deletions}`)
-    .join('\n');
-}
-
-function truncatePatchLines(patch: string, maxLines: number): string {
-  const lines = patch.split('\n');
-  if (lines.length <= maxLines) {
-    return patch;
-  }
-
-  return `${lines.slice(0, maxLines).join('\n')}\n...[truncated ${lines.length - maxLines} more lines]`;
-}
-
-function buildCompressedDiff(files: PRFile[], topN = DEFAULT_TOP_FILES, maxPatchLines = DEFAULT_MAX_PATCH_LINES): string {
-  const ranked = [...files]
-    .sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions) || a.filename.localeCompare(b.filename))
-    .slice(0, topN);
-
-  const changeSummaryLines = ranked.map(
-    file => `${file.filename} | status=${file.status} | +${file.additions}/-${file.deletions}`
-  );
-
-  const summarySection = ['Change Summary:', ...changeSummaryLines].join('\n');
-
-  const hunks: string[] = [];
-  for (const file of ranked) {
-    if (!file.patch) {
-      continue;
-    }
-
-    hunks.push(`File: ${file.filename}`);
-    hunks.push(truncatePatchLines(file.patch, maxPatchLines));
-  }
-
-  if (hunks.length === 0) {
-    return summarySection;
-  }
-
-  const fullPayload = `${summarySection}\n\nSelected Diff Hunks (truncated):\n${hunks.join('\n\n')}`;
-  if (fullPayload.length > MAX_PROMPT_DIFF_CHARS) {
-    return summarySection;
-  }
-
-  return fullPayload;
-}
-
-function buildPrompt(format: Format, summary: PRSummary): string {
-  return TEMPLATES[format]
-    .replace('{title}', summary.title)
-    .replace('{body}', summary.body || '(none)')
-    .replace('{files}', summary.filesText)
-    .replace('{diff}', summary.diffPayload);
-}
-
-function removeLeadingMetaLine(line: string): string {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return '';
-  }
-
-  const normalized = trimmed.toLowerCase();
-  if (
-    normalized.startsWith("here's") ||
-    normalized.startsWith('heres') ||
-    normalized.includes('your rap') ||
-    normalized.includes('your haiku') ||
-    normalized.includes('your roast') ||
-    normalized.startsWith('title:') ||
-    normalized.startsWith('rap:') ||
-    normalized.startsWith('haiku:') ||
-    normalized.startsWith('roast:')
-  ) {
-    return '';
-  }
-
-  return trimmed.replace(/^[-*]+\s*/, '');
-}
-
-function normalizeUnicode(text: string): string {
-  // Replace runs of characters outside Latin/punctuation/emoji with an em dash.
-  // Allows U+0000-U+04FF (Latin through Cyrillic, including spacing modifier
-  // letters like curly apostrophe U+02BC), General Punctuation (U+2000-U+206F),
-  // Miscellaneous Symbols, and emoji.
-  return text.replace(/[^\u0000-\u04FF\u2000-\u206F\u2600-\u27BF\uFE00-\uFEFF\u{1F000}-\u{1FFFF}]+/gu, '—');
-}
-
-function sanitizeOutput(format: Format, rawText: string): { text: string; needsHaikuRetry: boolean } {
-  const cleanedLines = normalizeUnicode(rawText)
-    .split('\n')
-    .map(removeLeadingMetaLine)
-    .filter(Boolean);
-
-  const maxLines = MAX_LINES_BY_FORMAT[format];
-  let lines = cleanedLines;
-
-  if (format === 'haiku') {
-    lines = lines.slice(0, 3);
-    if (lines.length < 3) {
-      return { text: lines.join('\n'), needsHaikuRetry: true };
-    }
-  } else {
-    lines = lines.slice(0, maxLines);
-  }
-
-  return { text: lines.join('\n').trim(), needsHaikuRetry: false };
-}
-
-function buildInputHash(format: Format, model: string, summary: PRSummary): string {
-  const payload = JSON.stringify({
-    format,
-    model,
-    title: summary.title,
-    body: summary.body,
-    filesText: summary.filesText,
-    diffPayload: summary.diffPayload,
-  });
-
-  return createHash('sha256').update(payload).digest('hex');
-}
-
-function buildCommentBody(format: Format, content: string, inputHash: string): string {
-  const marker = `<!-- ${COMMENT_MARKER_KEY}:hash=${inputHash} -->`;
-  const header = COMMENT_HEADERS[format];
-  return `${marker}\n${header}\n\n${content}\n\n---\n*Generated by [spit-the-diff](https://github.com/ssfinney/spit-the-diff)*`;
-}
+import {
+  type Format,
+  type PRSummary,
+  type ExistingBotComment,
+  DEFAULT_TOP_FILES,
+  COMMENT_MARKER_REGEX,
+  MODERATION_FALLBACK,
+  parseFormat,
+  buildPrompt,
+  sanitizeOutput,
+  buildInputHash,
+  buildCommentBody,
+  formatFilesList,
+  buildCompressedDiff,
+} from './lib';
 
 async function findExistingBotComment(
   octokit: ReturnType<typeof github.getOctokit>,
@@ -239,7 +67,7 @@ async function fetchPRData(
     per_page: 100,
   });
 
-  const normalizedFiles: PRFile[] = files.map(file => ({
+  const normalizedFiles = files.map(file => ({
     filename: file.filename,
     status: file.status,
     additions: file.additions,
