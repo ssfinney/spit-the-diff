@@ -1,6 +1,15 @@
 // Prompt templates are defined here so they are bundled into dist/index.js at
 // compile time. There is no runtime filesystem dependency on prompts/*.txt.
 
+const PROMPT_FOOTER = `If the diff is large, prioritize the PR title and description.
+
+PR Title: {title}
+PR Description: {body}
+Files changed: {files}
+
+Diff excerpt:
+{diff}`;
+
 export const TEMPLATES = {
   rap: `You are a creative hip-hop lyricist. Write a short rap verse summarizing this GitHub pull request.
 
@@ -14,14 +23,7 @@ Requirements:
 - Do not use bullet points or numbering
 - Output only the verse, no title or explanation
 
-If the diff is large, prioritize the PR title and description.
-
-PR Title: {title}
-PR Description: {body}
-Files changed: {files}
-
-Diff excerpt:
-{diff}`,
+${PROMPT_FOOTER}`,
 
   haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
 
@@ -32,15 +34,9 @@ Rules:
 - Mention a file, function, or module if relevant
 - No title or explanation
 - Output only the 3 lines
+- Do NOT write a label, preamble, or any text before or after the 3 lines
 
-If the diff is large, prioritize the PR title and description.
-
-PR Title: {title}
-PR Description: {body}
-Files changed: {files}
-
-Diff excerpt:
-{diff}`,
+${PROMPT_FOOTER}`,
 
   roast: `You are a playful battle-rap comedian. Write a lighthearted roast of the code changes in this GitHub pull request.
 
@@ -54,12 +50,5 @@ Rules:
 - Do not use bullet points or numbering
 - Output only the roast, no title or explanation
 
-If the diff is large, prioritize the PR title and description.
-
-PR Title: {title}
-PR Description: {body}
-Files changed: {files}
-
-Diff excerpt:
-{diff}`,
+${PROMPT_FOOTER}`,
 } satisfies Record<string, string>;

@@ -58,14 +58,15 @@ async function fetchPRData(
   prNumber: number,
   maxFiles: number = DEFAULT_TOP_FILES
 ): Promise<PRSummary> {
-  const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-
-  const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
-    owner,
-    repo,
-    pull_number: prNumber,
-    per_page: 100,
-  });
+  const [{ data: pr }, files] = await Promise.all([
+    octokit.rest.pulls.get({ owner, repo, pull_number: prNumber }),
+    octokit.paginate(octokit.rest.pulls.listFiles, {
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+    }),
+  ]);
 
   const normalizedFiles = files.map(file => ({
     filename: file.filename,
@@ -100,7 +101,8 @@ async function generateWithHaikuRetry(
     sanitized = sanitizeOutput(effectiveFormat, creative);
   } else if (!sanitized.text) {
     core.info('Sanitized output was empty. Retrying once.');
-    creative = await callLLM(client, model, prompt);
+    const emptyRetryPrompt = `${prompt}\n\nReminder: Output only the creative content, no title or explanation.`;
+    creative = await callLLM(client, model, emptyRetryPrompt);
     sanitized = sanitizeOutput(effectiveFormat, creative);
   }
 
@@ -179,9 +181,14 @@ async function run(): Promise<void> {
   const prNumber = pr.number as number;
   const action = ctx.payload.action;
 
+  // Normalize a label for comparison: lowercase and collapse hyphens/spaces/underscores.
+  // This lets "roast-me", "roast me", and "roastme" all match each other.
+  const normalizeLabel = (s: string) => s.toLowerCase().replace(/[\s\-_]+/g, '');
+  const normalizedRoastLabel = normalizeLabel(roastLabel);
+
   if (action === 'labeled') {
     const appliedLabel = ctx.payload.label?.name;
-    if (appliedLabel !== roastLabel) {
+    if (normalizeLabel(appliedLabel ?? '') !== normalizedRoastLabel) {
       core.info(`Label event for "${appliedLabel ?? 'unknown'}" does not match roast label "${roastLabel}". Skipping.`);
       return;
     }
@@ -189,8 +196,8 @@ async function run(): Promise<void> {
 
   core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
 
-  const labels: string[] = (pr.labels ?? []).map((l: { name?: string }) => l.name ?? '');
-  const effectiveFormat: Format = labels.includes(roastLabel) ? 'roast' : format;
+  const labels: string[] = (pr.labels ?? []).map((l: { name?: string }) => normalizeLabel(l.name ?? ''));
+  const effectiveFormat: Format = labels.includes(normalizedRoastLabel) ? 'roast' : format;
 
   if (effectiveFormat === 'roast') {
     core.info(`${roastLabel} label detected — switching to roast mode`);
@@ -199,9 +206,11 @@ async function run(): Promise<void> {
   core.info('Fetching PR metadata and file patches...');
   const maxFilesRaw = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
   const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : DEFAULT_TOP_FILES;
-  const summary = await fetchPRData(octokit, owner, repo, prNumber, maxFiles);
+  const [summary, existingComment] = await Promise.all([
+    fetchPRData(octokit, owner, repo, prNumber, maxFiles),
+    findExistingBotComment(octokit, owner, repo, prNumber),
+  ]);
   const inputHash = buildInputHash(effectiveFormat, model, summary);
-  const existingComment = await findExistingBotComment(octokit, owner, repo, prNumber);
 
   if (action === 'synchronize' && existingComment?.hash === inputHash) {
     core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
@@ -219,7 +228,8 @@ async function run(): Promise<void> {
     const flagged = await moderateText(client, finalText);
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
-      const retryText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
+      const safeRetryPrompt = `${prompt}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.`;
+      const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
       const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {
         core.warning('Second attempt also flagged by moderation. Using fallback message.');

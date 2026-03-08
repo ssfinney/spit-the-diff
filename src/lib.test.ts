@@ -12,6 +12,7 @@ import {
   buildCommentBody,
   MODERATION_FALLBACK,
   COMMENT_MARKER_REGEX,
+  NOISE_FILE_PATTERNS,
   type PRFile,
   type PRSummary,
 } from './lib';
@@ -168,6 +169,56 @@ describe('buildCompressedDiff', () => {
     expect(result).toContain('Change Summary:');
     expect(result).not.toContain('Selected Diff Hunks');
   });
+
+  it('excludes lockfiles from ranking and output', () => {
+    const files = [
+      makeFile({ filename: 'package-lock.json', additions: 5000, deletions: 5000 }),
+      makeFile({ filename: 'src/index.ts', additions: 10, deletions: 5 }),
+    ];
+    const result = buildCompressedDiff(files);
+    expect(result).not.toContain('package-lock.json');
+    expect(result).toContain('src/index.ts');
+  });
+
+  it('excludes dist/ files from ranking and output', () => {
+    const files = [
+      makeFile({ filename: 'dist/index.js', additions: 1000, deletions: 800 }),
+      makeFile({ filename: 'src/lib.ts', additions: 20, deletions: 5 }),
+    ];
+    const result = buildCompressedDiff(files);
+    expect(result).not.toContain('dist/index.js');
+    expect(result).toContain('src/lib.ts');
+  });
+
+  it('excludes sourcemaps from ranking and output', () => {
+    const files = [
+      makeFile({ filename: 'dist/index.js.map', additions: 2000, deletions: 1500 }),
+      makeFile({ filename: 'src/index.ts', additions: 5, deletions: 2 }),
+    ];
+    const result = buildCompressedDiff(files);
+    expect(result).not.toContain('dist/index.js.map');
+    expect(result).toContain('src/index.ts');
+  });
+});
+
+// ─── NOISE_FILE_PATTERNS ──────────────────────────────────────────────────────
+
+describe('NOISE_FILE_PATTERNS', () => {
+  const matches = (filename: string) => NOISE_FILE_PATTERNS.some(p => p.test(filename));
+
+  it('matches package-lock.json', () => expect(matches('package-lock.json')).toBe(true));
+  it('matches yarn.lock', () => expect(matches('yarn.lock')).toBe(true));
+  it('matches Gemfile.lock', () => expect(matches('Gemfile.lock')).toBe(true));
+  it('matches dist/index.js', () => expect(matches('dist/index.js')).toBe(true));
+  it('matches build/output.js', () => expect(matches('build/output.js')).toBe(true));
+  it('matches out/bundle.js', () => expect(matches('out/bundle.js')).toBe(true));
+  it('matches .next/server/page.js', () => expect(matches('.next/server/page.js')).toBe(true));
+  it('matches app.min.js', () => expect(matches('app.min.js')).toBe(true));
+  it('matches styles.min.css', () => expect(matches('styles.min.css')).toBe(true));
+  it('matches dist/index.js.map', () => expect(matches('dist/index.js.map')).toBe(true));
+  it('does not match src/index.ts', () => expect(matches('src/index.ts')).toBe(false));
+  it('does not match README.md', () => expect(matches('README.md')).toBe(false));
+  it('does not match src/components/Lock.tsx', () => expect(matches('src/components/Lock.tsx')).toBe(false));
 });
 
 // ─── buildPrompt ─────────────────────────────────────────────────────────────
