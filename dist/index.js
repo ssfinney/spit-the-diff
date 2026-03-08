@@ -35810,8 +35810,8 @@ async function run() {
         }
     }
     core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
-    const labels = (pr.labels ?? []).map((l) => l.name ?? '');
-    const effectiveFormat = labels.includes(roastLabel) ? 'roast' : format;
+    const labels = (pr.labels ?? []).map((l) => (l.name ?? '').toLowerCase());
+    const effectiveFormat = labels.includes(roastLabel.toLowerCase()) ? 'roast' : format;
     if (effectiveFormat === 'roast') {
         core.info(`${roastLabel} label detected — switching to roast mode`);
     }
@@ -35836,7 +35836,8 @@ async function run() {
         const flagged = await moderateText(client, finalText);
         if (flagged) {
             core.warning('First attempt flagged by moderation. Retrying...');
-            const retryText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
+            const safeRetryPrompt = `${prompt}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.`;
+            const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
             const flaggedAgain = await moderateText(client, retryText);
             if (flaggedAgain) {
                 core.warning('Second attempt also flagged by moderation. Using fallback message.');
@@ -35898,7 +35899,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = void 0;
+exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = void 0;
 exports.parseFormat = parseFormat;
 exports.formatFilesList = formatFilesList;
 exports.truncatePatchLines = truncatePatchLines;
@@ -35929,6 +35930,20 @@ exports.COMMENT_HEADERS = {
     roast: '🔥 **Code Roast**',
 };
 exports.MODERATION_FALLBACK = '_The generated content did not pass moderation. Try again._';
+// Files matching these patterns are excluded from diff ranking to avoid
+// generated/vendored files (lockfiles, build artifacts) dominating the prompt.
+exports.NOISE_FILE_PATTERNS = [
+    /^.*\.lock$/, // yarn.lock, Gemfile.lock, poetry.lock, etc.
+    /^package-lock\.json$/, // npm lockfile
+    /^pnpm-lock\.yaml$/, // pnpm lockfile
+    /^npm-shrinkwrap\.json$/,
+    /^dist\//, // compiled output
+    /^build\//,
+    /^out\//,
+    /^\.next\//,
+    /^.*\.min\.(js|css)$/, // minified assets
+    /^.*\.map$/, // sourcemaps
+];
 function parseFormat(input, fallback = 'rap') {
     if (exports.VALID_FORMATS.includes(input)) {
         return input;
@@ -35952,7 +35967,8 @@ function truncatePatchLines(patch, maxLines) {
     return `${lines.slice(0, maxLines).join('\n')}\n...[truncated ${lines.length - maxLines} more lines]`;
 }
 function buildCompressedDiff(files, topN = exports.DEFAULT_TOP_FILES, maxPatchLines = exports.DEFAULT_MAX_PATCH_LINES) {
-    const ranked = [...files]
+    const signal = files.filter(f => !exports.NOISE_FILE_PATTERNS.some(p => p.test(f.filename)));
+    const ranked = [...signal]
         .sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions) || a.filename.localeCompare(b.filename))
         .slice(0, topN);
     const changeSummaryLines = ranked.map(file => `${file.filename} | status=${file.status} | +${file.additions}/-${file.deletions}`);
@@ -35976,10 +35992,10 @@ function buildCompressedDiff(files, topN = exports.DEFAULT_TOP_FILES, maxPatchLi
 }
 function buildPrompt(format, summary) {
     return prompts_1.TEMPLATES[format]
-        .replace('{title}', summary.title)
-        .replace('{body}', summary.body || '(none)')
-        .replace('{files}', summary.filesText)
-        .replace('{diff}', summary.diffPayload);
+        .replace(/\{title\}/g, summary.title)
+        .replace(/\{body\}/g, summary.body || '(none)')
+        .replace(/\{files\}/g, summary.filesText)
+        .replace(/\{diff\}/g, summary.diffPayload);
 }
 function removeLeadingMetaLine(line) {
     const trimmed = line.trim();
@@ -36085,6 +36101,7 @@ Rules:
 - Mention a file, function, or module if relevant
 - No title or explanation
 - Output only the 3 lines
+- Do NOT write a label, preamble, or any text before or after the 3 lines
 
 ${PROMPT_FOOTER}`,
     roast: `You are a playful battle-rap comedian. Write a lighthearted roast of the code changes in this GitHub pull request.

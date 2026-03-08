@@ -34,6 +34,7 @@ Rules:
 - Mention a file, function, or module if relevant
 - No title or explanation
 - Output only the 3 lines
+- Do NOT write a label, preamble, or any text before or after the 3 lines
 
 ${PROMPT_FOOTER}`,
 

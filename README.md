@@ -47,7 +47,7 @@ name: spit-the-diff
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   rap-summary:

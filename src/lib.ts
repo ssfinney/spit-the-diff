@@ -47,6 +47,21 @@ export const COMMENT_HEADERS: Record<Format, string> = {
 
 export const MODERATION_FALLBACK = '_The generated content did not pass moderation. Try again._';
 
+// Files matching these patterns are excluded from diff ranking to avoid
+// generated/vendored files (lockfiles, build artifacts) dominating the prompt.
+export const NOISE_FILE_PATTERNS: readonly RegExp[] = [
+  /^.*\.lock$/,           // yarn.lock, Gemfile.lock, poetry.lock, etc.
+  /^package-lock\.json$/, // npm lockfile
+  /^pnpm-lock\.yaml$/,    // pnpm lockfile
+  /^npm-shrinkwrap\.json$/,
+  /^dist\//,              // compiled output
+  /^build\//,
+  /^out\//,
+  /^\.next\//,
+  /^.*\.min\.(js|css)$/,  // minified assets
+  /^.*\.map$/,            // sourcemaps
+];
+
 export function parseFormat(input: string, fallback: Format = 'rap'): Format {
   if (VALID_FORMATS.includes(input as Format)) {
     return input as Format;
@@ -80,7 +95,8 @@ export function buildCompressedDiff(
   topN = DEFAULT_TOP_FILES,
   maxPatchLines = DEFAULT_MAX_PATCH_LINES
 ): string {
-  const ranked = [...files]
+  const signal = files.filter(f => !NOISE_FILE_PATTERNS.some(p => p.test(f.filename)));
+  const ranked = [...signal]
     .sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions) || a.filename.localeCompare(b.filename))
     .slice(0, topN);
 
@@ -114,10 +130,10 @@ export function buildCompressedDiff(
 
 export function buildPrompt(format: Format, summary: PRSummary): string {
   return TEMPLATES[format]
-    .replace('{title}', summary.title)
-    .replace('{body}', summary.body || '(none)')
-    .replace('{files}', summary.filesText)
-    .replace('{diff}', summary.diffPayload);
+    .replace(/\{title\}/g, summary.title)
+    .replace(/\{body\}/g, summary.body || '(none)')
+    .replace(/\{files\}/g, summary.filesText)
+    .replace(/\{diff\}/g, summary.diffPayload);
 }
 
 export function removeLeadingMetaLine(line: string): string {

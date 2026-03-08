@@ -24,6 +24,5 @@ jobs:
           format: rap
           model: gpt-4.1-mini
           roast_label: roast-me
-          profanity_filter: on
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           github_token: ${{ github.token }}

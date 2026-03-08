@@ -191,8 +191,8 @@ async function run(): Promise<void> {
 
   core.info(`Analyzing PR #${prNumber}: ${pr.title}`);
 
-  const labels: string[] = (pr.labels ?? []).map((l: { name?: string }) => l.name ?? '');
-  const effectiveFormat: Format = labels.includes(roastLabel) ? 'roast' : format;
+  const labels: string[] = (pr.labels ?? []).map((l: { name?: string }) => (l.name ?? '').toLowerCase());
+  const effectiveFormat: Format = labels.includes(roastLabel.toLowerCase()) ? 'roast' : format;
 
   if (effectiveFormat === 'roast') {
     core.info(`${roastLabel} label detected — switching to roast mode`);
@@ -223,7 +223,8 @@ async function run(): Promise<void> {
     const flagged = await moderateText(client, finalText);
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
-      const retryText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
+      const safeRetryPrompt = `${prompt}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.`;
+      const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
       const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {
         core.warning('Second attempt also flagged by moderation. Using fallback message.');
