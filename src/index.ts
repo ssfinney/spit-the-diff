@@ -6,6 +6,8 @@ import {
   type PRSummary,
   type ExistingBotComment,
   DEFAULT_TOP_FILES,
+  DEFAULT_MAX_PATCH_LINES,
+  MAX_PROMPT_DIFF_CHARS,
   COMMENT_MARKER_REGEX,
   MODERATION_FALLBACK,
   MIC_DROP_MAX_LINES,
@@ -59,7 +61,9 @@ async function fetchPRData(
   owner: string,
   repo: string,
   prNumber: number,
-  maxFiles: number = DEFAULT_TOP_FILES
+  maxFiles: number = DEFAULT_TOP_FILES,
+  maxPatchLines: number = DEFAULT_MAX_PATCH_LINES,
+  maxPromptChars: number = MAX_PROMPT_DIFF_CHARS
 ): Promise<PRSummary> {
   const [{ data: pr }, files] = await Promise.all([
     octokit.rest.pulls.get({ owner, repo, pull_number: prNumber }),
@@ -84,7 +88,7 @@ async function fetchPRData(
     body: pr.body ?? '',
     files: normalizedFiles,
     filesText: formatFilesList(normalizedFiles),
-    diffPayload: buildCompressedDiff(normalizedFiles, maxFiles),
+    diffPayload: buildCompressedDiff(normalizedFiles, maxFiles, maxPatchLines, maxPromptChars),
   };
 }
 
@@ -215,8 +219,12 @@ async function run(): Promise<void> {
   core.info('Fetching PR metadata and file patches...');
   const maxFilesRaw = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
   const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : DEFAULT_TOP_FILES;
+  const maxPatchLinesRaw = parseInt(core.getInput('max_patch_lines') || String(DEFAULT_MAX_PATCH_LINES), 10);
+  const maxPatchLines = Number.isFinite(maxPatchLinesRaw) && maxPatchLinesRaw > 0 ? maxPatchLinesRaw : DEFAULT_MAX_PATCH_LINES;
+  const maxPromptCharsRaw = parseInt(core.getInput('max_prompt_chars') || String(MAX_PROMPT_DIFF_CHARS), 10);
+  const maxPromptChars = Number.isFinite(maxPromptCharsRaw) && maxPromptCharsRaw > 0 ? maxPromptCharsRaw : MAX_PROMPT_DIFF_CHARS;
   const [summary, existingComment] = await Promise.all([
-    fetchPRData(octokit, owner, repo, prNumber, maxFiles),
+    fetchPRData(octokit, owner, repo, prNumber, maxFiles, maxPatchLines, maxPromptChars),
     findExistingBotComment(octokit, owner, repo, prNumber),
   ]);
   const inputHash = buildInputHash(effectiveFormat, model, summary);

@@ -94,7 +94,8 @@ export function truncatePatchLines(patch: string, maxLines: number): string {
 export function buildCompressedDiff(
   files: PRFile[],
   topN = DEFAULT_TOP_FILES,
-  maxPatchLines = DEFAULT_MAX_PATCH_LINES
+  maxPatchLines = DEFAULT_MAX_PATCH_LINES,
+  maxPromptChars = MAX_PROMPT_DIFF_CHARS
 ): string {
   const signal = files.filter(f => !NOISE_FILE_PATTERNS.some(p => p.test(f.filename)));
   const ranked = [...signal]
@@ -122,7 +123,7 @@ export function buildCompressedDiff(
   }
 
   const fullPayload = `${summarySection}\n\nSelected Diff Hunks (truncated):\n${hunks.join('\n\n')}`;
-  if (fullPayload.length > MAX_PROMPT_DIFF_CHARS) {
+  if (fullPayload.length > maxPromptChars) {
     return summarySection;
   }
 

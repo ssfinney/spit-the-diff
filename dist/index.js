@@ -35708,7 +35708,7 @@ async function moderateText(client, text) {
     const result = await client.moderations.create({ input: text });
     return result.results[0]?.flagged ?? false;
 }
-async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = lib_1.DEFAULT_TOP_FILES) {
+async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = lib_1.DEFAULT_TOP_FILES, maxPatchLines = lib_1.DEFAULT_MAX_PATCH_LINES, maxPromptChars = lib_1.MAX_PROMPT_DIFF_CHARS) {
     const [{ data: pr }, files] = await Promise.all([
         octokit.rest.pulls.get({ owner, repo, pull_number: prNumber }),
         octokit.paginate(octokit.rest.pulls.listFiles, {
@@ -35730,7 +35730,7 @@ async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = lib_1.DEFA
         body: pr.body ?? '',
         files: normalizedFiles,
         filesText: (0, lib_1.formatFilesList)(normalizedFiles),
-        diffPayload: (0, lib_1.buildCompressedDiff)(normalizedFiles, maxFiles),
+        diffPayload: (0, lib_1.buildCompressedDiff)(normalizedFiles, maxFiles, maxPatchLines, maxPromptChars),
     };
 }
 async function generateWithHaikuRetry(client, model, prompt, effectiveFormat) {
@@ -35827,8 +35827,12 @@ async function run() {
     core.info('Fetching PR metadata and file patches...');
     const maxFilesRaw = parseInt(core.getInput('max_files') || String(lib_1.DEFAULT_TOP_FILES), 10);
     const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : lib_1.DEFAULT_TOP_FILES;
+    const maxPatchLinesRaw = parseInt(core.getInput('max_patch_lines') || String(lib_1.DEFAULT_MAX_PATCH_LINES), 10);
+    const maxPatchLines = Number.isFinite(maxPatchLinesRaw) && maxPatchLinesRaw > 0 ? maxPatchLinesRaw : lib_1.DEFAULT_MAX_PATCH_LINES;
+    const maxPromptCharsRaw = parseInt(core.getInput('max_prompt_chars') || String(lib_1.MAX_PROMPT_DIFF_CHARS), 10);
+    const maxPromptChars = Number.isFinite(maxPromptCharsRaw) && maxPromptCharsRaw > 0 ? maxPromptCharsRaw : lib_1.MAX_PROMPT_DIFF_CHARS;
     const [summary, existingComment] = await Promise.all([
-        fetchPRData(octokit, owner, repo, prNumber, maxFiles),
+        fetchPRData(octokit, owner, repo, prNumber, maxFiles, maxPatchLines, maxPromptChars),
         findExistingBotComment(octokit, owner, repo, prNumber),
     ]);
     const inputHash = (0, lib_1.buildInputHash)(effectiveFormat, model, summary);
@@ -36001,7 +36005,7 @@ function truncatePatchLines(patch, maxLines) {
     }
     return `${lines.slice(0, maxLines).join('\n')}\n...[truncated ${lines.length - maxLines} more lines]`;
 }
-function buildCompressedDiff(files, topN = exports.DEFAULT_TOP_FILES, maxPatchLines = exports.DEFAULT_MAX_PATCH_LINES) {
+function buildCompressedDiff(files, topN = exports.DEFAULT_TOP_FILES, maxPatchLines = exports.DEFAULT_MAX_PATCH_LINES, maxPromptChars = exports.MAX_PROMPT_DIFF_CHARS) {
     const signal = files.filter(f => !exports.NOISE_FILE_PATTERNS.some(p => p.test(f.filename)));
     const ranked = [...signal]
         .sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions) || a.filename.localeCompare(b.filename))
@@ -36020,7 +36024,7 @@ function buildCompressedDiff(files, topN = exports.DEFAULT_TOP_FILES, maxPatchLi
         return summarySection;
     }
     const fullPayload = `${summarySection}\n\nSelected Diff Hunks (truncated):\n${hunks.join('\n\n')}`;
-    if (fullPayload.length > exports.MAX_PROMPT_DIFF_CHARS) {
+    if (fullPayload.length > maxPromptChars) {
         return summarySection;
     }
     return fullPayload;
