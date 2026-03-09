@@ -10,11 +10,14 @@ import {
   MODERATION_FALLBACK,
   parseFormat,
   buildPrompt,
+  buildMicDropPrompt,
   sanitizeOutput,
   buildInputHash,
   buildCommentBody,
   formatFilesList,
   buildCompressedDiff,
+  countDiffLines,
+  MIC_DROP_MAX_LINES,
 } from './lib';
 
 async function findExistingBotComment(
@@ -156,6 +159,7 @@ async function run(): Promise<void> {
   const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
   const roastLabel = core.getInput('roast_label') || 'roast-me';
   const enableModeration = core.getInput('enable_moderation') !== 'false';
+  const skipDrafts = core.getInput('skip_drafts') === 'true';
 
   if (!openaiApiKey) {
     core.setFailed('openai_api_key input is required');
@@ -172,6 +176,12 @@ async function run(): Promise<void> {
 
   if (!pr) {
     core.setFailed('This action only runs on pull_request events');
+    return;
+  }
+
+  if (skipDrafts && pr.draft) {
+    core.info('PR is in draft status. Skipping.');
+    core.info('Tip: include "ready_for_review" in pull_request.types to run when the PR leaves draft.');
     return;
   }
 
@@ -212,16 +222,40 @@ async function run(): Promise<void> {
   ]);
   const inputHash = buildInputHash(effectiveFormat, model, summary);
 
+  const totalNonNoiseDiffLines = countDiffLines(summary.files);
+  const minDiffLinesRaw = Number.parseInt(core.getInput('min_diff_lines') || '0', 10);
+  const minDiffLines = Number.isFinite(minDiffLinesRaw) && minDiffLinesRaw > 0 ? minDiffLinesRaw : 0;
+  if (minDiffLines > 0 && totalNonNoiseDiffLines < minDiffLines) {
+    core.info(`Diff is only ${totalNonNoiseDiffLines} non-noise lines (threshold: ${minDiffLines}). Skipping.`);
+    return;
+  }
+
+  const micDropThresholdRaw = Number.parseInt(core.getInput('mic_drop_threshold') || '0', 10);
+  const micDropThreshold = Number.isFinite(micDropThresholdRaw) && micDropThresholdRaw > 0 ? micDropThresholdRaw : 0;
+  const isMicDrop = micDropThreshold > 0 && totalNonNoiseDiffLines < micDropThreshold;
+  if (isMicDrop) {
+    core.info(`Small diff (${totalNonNoiseDiffLines} non-noise lines). Using mic drop mode.`);
+  }
+
   if (action === 'synchronize' && existingComment?.hash === inputHash) {
     core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
     return;
   }
 
   core.info(`Building ${effectiveFormat} prompt...`);
-  const prompt = buildPrompt(effectiveFormat, summary);
+  const prompt = isMicDrop ? buildMicDropPrompt(summary) : buildPrompt(effectiveFormat, summary);
+
+  const generateContent = async (currentPrompt: string): Promise<string> => {
+    if (!isMicDrop) {
+      return generateWithHaikuRetry(client, model, currentPrompt, effectiveFormat);
+    }
+
+    const creative = await callLLM(client, model, currentPrompt);
+    return sanitizeOutput('rap', creative).text;
+  };
 
   core.info(`Calling ${model}...`);
-  let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
+  let finalText = await generateContent(prompt);
 
   if (enableModeration) {
     core.info('Running moderation check...');
@@ -229,7 +263,7 @@ async function run(): Promise<void> {
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
       const safeRetryPrompt = `${prompt}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.`;
-      const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
+      const retryText = await generateContent(safeRetryPrompt);
       const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {
         core.warning('Second attempt also flagged by moderation. Using fallback message.');
@@ -238,6 +272,10 @@ async function run(): Promise<void> {
         finalText = retryText;
       }
     }
+  }
+
+  if (isMicDrop) {
+    finalText = finalText.split('\n').slice(0, MIC_DROP_MAX_LINES).join('\n').trim();
   }
 
   core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');

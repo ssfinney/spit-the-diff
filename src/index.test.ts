@@ -121,6 +121,104 @@ describe('run()', () => {
     );
   });
 
+  it('skips draft PRs when skip_drafts is true', async () => {
+    const llmCreate = makeLLMCreate();
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const octokit = makeOctokit({ createComment: mockCreateComment });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ skip_drafts: 'true' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [], draft: true }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    expect(mockCreateComment).not.toHaveBeenCalled();
+    expect(llmCreate).not.toHaveBeenCalled();
+  });
+
+  it('runs when draft is removed on ready_for_review', async () => {
+    const llmCreate = makeLLMCreate('ready now');
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const octokit = makeOctokit({ createComment: mockCreateComment });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ skip_drafts: 'true' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [], draft: false }, action: 'ready_for_review' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    expect(llmCreate).toHaveBeenCalled();
+    expect(mockCreateComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('ready now') }),
+    );
+  });
+
+  it('skips when min_diff_lines threshold is not met (non-noise lines)', async () => {
+    const llmCreate = makeLLMCreate();
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const files = [{ filename: 'src/index.ts', status: 'modified', additions: 0, deletions: 0, patch: '' }];
+    const octokit = makeOctokit({ createComment: mockCreateComment, files });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ min_diff_lines: '1' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    expect(mockCreateComment).not.toHaveBeenCalled();
+    expect(llmCreate).not.toHaveBeenCalled();
+  });
+
+  it('uses mic drop mode for small diffs and trims output to 2 lines', async () => {
+    const llmCreate = makeLLMCreate('first line\nsecond line\nthird line');
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const files = [{ filename: 'src/index.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@' }];
+    const octokit = makeOctokit({ createComment: mockCreateComment, files });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ format: 'haiku', mic_drop_threshold: '10' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    const { setOutput } = await import('@actions/core');
+    expect(vi.mocked(setOutput)).toHaveBeenCalledWith('content', 'first line\nsecond line');
+    expect(mockCreateComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('first line\nsecond line') }),
+    );
+    expect(mockCreateComment).not.toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('third line') }),
+    );
+  });
+
   it('posts the retry text when first moderation attempt is flagged but the retry passes', async () => {
     const llmCreate = vi.fn()
       .mockResolvedValueOnce({ choices: [{ finish_reason: 'stop', message: { content: 'first output' } }] })

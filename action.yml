@@ -32,6 +32,21 @@ inputs:
     required: false
     default: 'true'
 
+  skip_drafts:
+    description: 'Skip draft PRs when set to true.'
+    required: false
+    default: 'false'
+
+  min_diff_lines:
+    description: 'Skip if total non-noise diff lines are below this threshold (0 or empty = disabled).'
+    required: false
+    default: '0'
+
+  mic_drop_threshold:
+    description: 'Use a 2-line "mic drop" when non-noise diff lines are below this threshold (0 or empty = disabled).'
+    required: false
+    default: '0'
+
   openai_api_key:
     description: 'OpenAI API key for LLM calls'
     required: true

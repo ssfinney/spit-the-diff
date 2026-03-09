@@ -47,7 +47,7 @@ name: spit-the-diff
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, ready_for_review]
 
 jobs:
   rap-summary:
@@ -56,7 +56,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Generate PR summary
         uses: ssfinney/spit-the-diff@v1
@@ -116,6 +116,9 @@ Do not print the key in logs or echo commands in CI.
 | `max_files` | Max changed files included in the diff payload | `6` |
 | `roast_label` | PR label that enables roast mode | `roast-me` |
 | `enable_moderation` | Run OpenAI moderation on output before posting | `true` |
+| `skip_drafts` | Skip draft PRs when set to `true` | `false` |
+| `min_diff_lines` | Skip when total non-noise diff lines are below this threshold (`0` disables) | `0` |
+| `mic_drop_threshold` | Use 2-line mic drop mode when non-noise diff lines are below this threshold (`0` disables) | `0` |
 | `openai_api_key` | Your OpenAI API key (**required**) | — |
 | `github_token` | GitHub token for posting comments | `${{ github.token }}` |
 

@@ -5,6 +5,8 @@ import {
   truncatePatchLines,
   buildCompressedDiff,
   buildPrompt,
+  buildMicDropPrompt,
+  countDiffLines,
   removeLeadingMetaLine,
   normalizeUnicode,
   sanitizeOutput,
@@ -252,6 +254,46 @@ describe('buildPrompt', () => {
 
   it('uses the roast template for roast format', () => {
     expect(buildPrompt('roast', summary)).toContain('roast');
+  });
+});
+
+describe('buildMicDropPrompt', () => {
+  it('substitutes title/body/files/diff placeholders', () => {
+    const summary = makeSummary({
+      title: 'Improve parser',
+      body: 'Adds fast-path for tokens',
+      filesText: 'src/parser.ts | modified | +12/-3',
+      diffPayload: 'Change Summary:\nsrc/parser.ts | status=modified | +12/-3',
+    });
+
+    const prompt = buildMicDropPrompt(summary);
+    expect(prompt).toContain('Improve parser');
+    expect(prompt).toContain('Adds fast-path for tokens');
+    expect(prompt).toContain('src/parser.ts | modified | +12/-3');
+    expect(prompt).toContain('Change Summary:\nsrc/parser.ts | status=modified | +12/-3');
+  });
+});
+
+describe('countDiffLines', () => {
+  it('returns 0 for empty input', () => {
+    expect(countDiffLines([])).toBe(0);
+  });
+
+  it('returns 0 for noise-only files', () => {
+    const files = [
+      makeFile({ filename: 'package-lock.json', additions: 100, deletions: 20 }),
+      makeFile({ filename: 'dist/index.js.map', additions: 40, deletions: 10 }),
+    ];
+    expect(countDiffLines(files)).toBe(0);
+  });
+
+  it('counts only non-noise additions and deletions', () => {
+    const files = [
+      makeFile({ filename: 'src/index.ts', additions: 10, deletions: 5 }),
+      makeFile({ filename: 'package-lock.json', additions: 999, deletions: 999 }),
+      makeFile({ filename: 'src/lib.ts', additions: 2, deletions: 1 }),
+    ];
+    expect(countDiffLines(files)).toBe(18);
   });
 });
 

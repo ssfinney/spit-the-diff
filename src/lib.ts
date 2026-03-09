@@ -28,6 +28,7 @@ export interface ExistingBotComment {
 export const MAX_PROMPT_DIFF_CHARS = 30000;
 export const DEFAULT_TOP_FILES = 6;
 export const DEFAULT_MAX_PATCH_LINES = 60;
+export const MIC_DROP_MAX_LINES = 2;
 
 export const MAX_LINES_BY_FORMAT: Record<Format, number> = {
   rap: 8,
@@ -134,6 +135,20 @@ export function buildPrompt(format: Format, summary: PRSummary): string {
     .replace(/\{body\}/g, summary.body || '(none)')
     .replace(/\{files\}/g, summary.filesText)
     .replace(/\{diff\}/g, summary.diffPayload);
+}
+
+export function buildMicDropPrompt(summary: PRSummary): string {
+  return TEMPLATES.mic_drop
+    .replace(/\{title\}/g, summary.title)
+    .replace(/\{body\}/g, summary.body || '(none)')
+    .replace(/\{files\}/g, summary.filesText)
+    .replace(/\{diff\}/g, summary.diffPayload);
+}
+
+export function countDiffLines(files: PRFile[]): number {
+  return files
+    .filter(f => !NOISE_FILE_PATTERNS.some(p => p.test(f.filename)))
+    .reduce((sum, f) => sum + f.additions + f.deletions, 0);
 }
 
 export function removeLeadingMetaLine(line: string): string {
