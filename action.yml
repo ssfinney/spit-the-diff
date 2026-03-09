@@ -32,6 +32,21 @@ inputs:
     required: false
     default: 'true'
 
+  skip_drafts:
+    description: 'Set to true to skip draft PRs entirely. Add "ready_for_review" to pull_request.types to re-trigger when the PR is marked ready.'
+    required: false
+    default: 'false'
+
+  min_diff_lines:
+    description: 'Skip if total non-noise diff lines are below this threshold. 0 disables the check.'
+    required: false
+    default: '0'
+
+  mic_drop_threshold:
+    description: 'Use a tight 2-line mic drop instead of the full format when non-noise diff lines are below this threshold. 0 disables. Should be larger than min_diff_lines when both are set.'
+    required: false
+    default: '0'
+
   openai_api_key:
     description: 'OpenAI API key for LLM calls'
     required: true

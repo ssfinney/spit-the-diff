@@ -51,4 +51,15 @@ Rules:
 - Output only the roast, no title or explanation
 
 ${PROMPT_FOOTER}`,
+
+  mic_drop: `You are a hip-hop lyricist. This is a small pull request — give it a tight 2-line mic drop.
+
+Rules:
+- Exactly 2 lines
+- The lines must rhyme with each other
+- Name the specific file, function, or change if possible
+- Punchy and funny
+- No title, label, or explanation — output only the 2 lines
+
+${PROMPT_FOOTER}`,
 } satisfies Record<string, string>;

@@ -35783,6 +35783,7 @@ async function run() {
     const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
     const roastLabel = core.getInput('roast_label') || 'roast-me';
     const enableModeration = core.getInput('enable_moderation') !== 'false';
+    const skipDrafts = core.getInput('skip_drafts') === 'true';
     if (!openaiApiKey) {
         core.setFailed('openai_api_key input is required');
         return;
@@ -35795,6 +35796,10 @@ async function run() {
     const pr = ctx.payload.pull_request;
     if (!pr) {
         core.setFailed('This action only runs on pull_request events');
+        return;
+    }
+    if (skipDrafts && pr.draft) {
+        core.info('PR is in draft status. Skipping. Add "ready_for_review" to pull_request.types to trigger when the PR is marked ready.');
         return;
     }
     const octokit = github.getOctokit(githubToken);
@@ -35827,12 +35832,23 @@ async function run() {
         findExistingBotComment(octokit, owner, repo, prNumber),
     ]);
     const inputHash = (0, lib_1.buildInputHash)(effectiveFormat, model, summary);
+    const totalLines = (0, lib_1.countDiffLines)(summary.files);
+    const minDiffLines = parseInt(core.getInput('min_diff_lines') || '0', 10);
+    if (minDiffLines > 0 && totalLines < minDiffLines) {
+        core.info(`Diff is only ${totalLines} non-noise lines (threshold: ${minDiffLines}). Skipping.`);
+        return;
+    }
+    const micDropThreshold = parseInt(core.getInput('mic_drop_threshold') || '0', 10);
+    const isMicDrop = micDropThreshold > 0 && totalLines < micDropThreshold;
+    if (isMicDrop) {
+        core.info(`Small diff (${totalLines} non-noise lines). Using mic drop mode.`);
+    }
     if (action === 'synchronize' && existingComment?.hash === inputHash) {
         core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
         return;
     }
     core.info(`Building ${effectiveFormat} prompt...`);
-    const prompt = (0, lib_1.buildPrompt)(effectiveFormat, summary);
+    const prompt = isMicDrop ? (0, lib_1.buildMicDropPrompt)(summary) : (0, lib_1.buildPrompt)(effectiveFormat, summary);
     core.info(`Calling ${model}...`);
     let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
     if (enableModeration) {
@@ -35851,6 +35867,9 @@ async function run() {
                 finalText = retryText;
             }
         }
+    }
+    if (isMicDrop) {
+        finalText = finalText.split('\n').slice(0, lib_1.MIC_DROP_MAX_LINES).join('\n').trim();
     }
     core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
     await upsertComment(octokit, owner, repo, prNumber, effectiveFormat, finalText, inputHash, existingComment);
@@ -35903,12 +35922,14 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = void 0;
+exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.MIC_DROP_MAX_LINES = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = void 0;
 exports.parseFormat = parseFormat;
 exports.formatFilesList = formatFilesList;
 exports.truncatePatchLines = truncatePatchLines;
 exports.buildCompressedDiff = buildCompressedDiff;
 exports.buildPrompt = buildPrompt;
+exports.buildMicDropPrompt = buildMicDropPrompt;
+exports.countDiffLines = countDiffLines;
 exports.removeLeadingMetaLine = removeLeadingMetaLine;
 exports.normalizeUnicode = normalizeUnicode;
 exports.sanitizeOutput = sanitizeOutput;
@@ -35920,6 +35941,7 @@ const prompts_1 = __nccwpck_require__(6224);
 exports.MAX_PROMPT_DIFF_CHARS = 30000;
 exports.DEFAULT_TOP_FILES = 6;
 exports.DEFAULT_MAX_PATCH_LINES = 60;
+exports.MIC_DROP_MAX_LINES = 2;
 exports.MAX_LINES_BY_FORMAT = {
     rap: 8,
     haiku: 3,
@@ -36000,6 +36022,18 @@ function buildPrompt(format, summary) {
         .replace(/\{body\}/g, summary.body || '(none)')
         .replace(/\{files\}/g, summary.filesText)
         .replace(/\{diff\}/g, summary.diffPayload);
+}
+function buildMicDropPrompt(summary) {
+    return prompts_1.TEMPLATES.mic_drop
+        .replace(/\{title\}/g, summary.title)
+        .replace(/\{body\}/g, summary.body || '(none)')
+        .replace(/\{files\}/g, summary.filesText)
+        .replace(/\{diff\}/g, summary.diffPayload);
+}
+function countDiffLines(files) {
+    return files
+        .filter(f => !exports.NOISE_FILE_PATTERNS.some(p => p.test(f.filename)))
+        .reduce((sum, f) => sum + f.additions + f.deletions, 0);
 }
 function removeLeadingMetaLine(line) {
     const trimmed = line.trim();
@@ -36119,6 +36153,16 @@ Rules:
 - No harassment or personal attacks
 - Do not use bullet points or numbering
 - Output only the roast, no title or explanation
+
+${PROMPT_FOOTER}`,
+    mic_drop: `You are a hip-hop lyricist. This is a small pull request — give it a tight 2-line mic drop.
+
+Rules:
+- Exactly 2 lines
+- The lines must rhyme with each other
+- Name the specific file, function, or change if possible
+- Punchy and funny
+- No title, label, or explanation — output only the 2 lines
 
 ${PROMPT_FOOTER}`,
 };

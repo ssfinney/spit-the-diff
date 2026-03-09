@@ -8,13 +8,16 @@ import {
   DEFAULT_TOP_FILES,
   COMMENT_MARKER_REGEX,
   MODERATION_FALLBACK,
+  MIC_DROP_MAX_LINES,
   parseFormat,
   buildPrompt,
+  buildMicDropPrompt,
   sanitizeOutput,
   buildInputHash,
   buildCommentBody,
   formatFilesList,
   buildCompressedDiff,
+  countDiffLines,
 } from './lib';
 
 async function findExistingBotComment(
@@ -156,6 +159,7 @@ async function run(): Promise<void> {
   const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
   const roastLabel = core.getInput('roast_label') || 'roast-me';
   const enableModeration = core.getInput('enable_moderation') !== 'false';
+  const skipDrafts = core.getInput('skip_drafts') === 'true';
 
   if (!openaiApiKey) {
     core.setFailed('openai_api_key input is required');
@@ -172,6 +176,11 @@ async function run(): Promise<void> {
 
   if (!pr) {
     core.setFailed('This action only runs on pull_request events');
+    return;
+  }
+
+  if (skipDrafts && pr.draft) {
+    core.info('PR is in draft status. Skipping. Add "ready_for_review" to pull_request.types to trigger when the PR is marked ready.');
     return;
   }
 
@@ -212,13 +221,27 @@ async function run(): Promise<void> {
   ]);
   const inputHash = buildInputHash(effectiveFormat, model, summary);
 
+  const totalLines = countDiffLines(summary.files);
+
+  const minDiffLines = parseInt(core.getInput('min_diff_lines') || '0', 10);
+  if (minDiffLines > 0 && totalLines < minDiffLines) {
+    core.info(`Diff is only ${totalLines} non-noise lines (threshold: ${minDiffLines}). Skipping.`);
+    return;
+  }
+
+  const micDropThreshold = parseInt(core.getInput('mic_drop_threshold') || '0', 10);
+  const isMicDrop = micDropThreshold > 0 && totalLines < micDropThreshold;
+  if (isMicDrop) {
+    core.info(`Small diff (${totalLines} non-noise lines). Using mic drop mode.`);
+  }
+
   if (action === 'synchronize' && existingComment?.hash === inputHash) {
     core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
     return;
   }
 
   core.info(`Building ${effectiveFormat} prompt...`);
-  const prompt = buildPrompt(effectiveFormat, summary);
+  const prompt = isMicDrop ? buildMicDropPrompt(summary) : buildPrompt(effectiveFormat, summary);
 
   core.info(`Calling ${model}...`);
   let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
@@ -238,6 +261,10 @@ async function run(): Promise<void> {
         finalText = retryText;
       }
     }
+  }
+
+  if (isMicDrop) {
+    finalText = finalText.split('\n').slice(0, MIC_DROP_MAX_LINES).join('\n').trim();
   }
 
   core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
