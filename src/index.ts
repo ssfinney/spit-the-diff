@@ -234,9 +234,13 @@ async function run(): Promise<void> {
   }
 
   const micDropThreshold = parseInt(core.getInput('mic_drop_threshold') || '0', 10);
-  const isMicDrop = micDropThreshold > 0 && totalLines < micDropThreshold;
+  // Haiku is already a minimal 3-line format — mic drop (2 lines) would produce a non-haiku,
+  // so we skip mic drop mode entirely when haiku is selected.
+  const isMicDrop = micDropThreshold > 0 && totalLines < micDropThreshold && effectiveFormat !== 'haiku';
   if (isMicDrop) {
     core.info(`Small diff (${totalLines} non-noise lines). Using mic drop mode.`);
+  } else if (micDropThreshold > 0 && totalLines < micDropThreshold && effectiveFormat === 'haiku') {
+    core.info(`Small diff (${totalLines} non-noise lines) but haiku format selected — skipping mic drop.`);
   }
 
   if (action === 'synchronize' && existingComment?.hash === inputHash) {
@@ -247,13 +251,8 @@ async function run(): Promise<void> {
   core.info(`Building ${effectiveFormat} prompt...`);
   const prompt = isMicDrop ? buildMicDropPrompt(summary) : buildPrompt(effectiveFormat, summary);
 
-  // Mic drop needs exactly 2 lines — skip the haiku 3-line retry check by using
-  // 'rap' as the generation format. The empty-output retry in generateWithHaikuRetry
-  // still applies, and the 2-line slice happens after posting.
-  const generationFormat = isMicDrop ? 'rap' : effectiveFormat;
-
   core.info(`Calling ${model}...`);
-  let finalText = await generateWithHaikuRetry(client, model, prompt, generationFormat);
+  let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
 
   if (enableModeration) {
     core.info('Running moderation check...');
@@ -261,7 +260,7 @@ async function run(): Promise<void> {
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
       const safeRetryPrompt = `${prompt}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.`;
-      const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, generationFormat);
+      const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
       const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {
         core.warning('Second attempt also flagged by moderation. Using fallback message.');

@@ -329,15 +329,10 @@ describe('run()', () => {
     expect(body).not.toContain('third line should be cut');
   });
 
-  it('mic drop with haiku format does not trigger haiku 3-line retry', async () => {
-    // Return only 2 lines — a haiku retry would incorrectly fire here without the fix.
-    let callCount = 0;
-    const llmCreate = vi.fn().mockImplementation(() => {
-      callCount++;
-      return Promise.resolve({
-        choices: [{ finish_reason: 'stop', message: { content: 'one liner drop\nsecond rhyme here' } }],
-      });
-    });
+  it('haiku format skips mic drop and generates a full haiku', async () => {
+    // Haiku is already minimal — mic drop mode is bypassed entirely for haiku format.
+    // The LLM returns a proper 3-line haiku; no 2-line truncation should occur.
+    const llmCreate = makeLLMCreate('code lands on the branch\nlines shift and the diff grows small\nhaiku endures all');
     const mockCreateComment = vi.fn().mockResolvedValue({});
     const files = [{ filename: 'src/index.ts', status: 'modified', additions: 2, deletions: 1 }];
     const octokit = makeOctokit({ createComment: mockCreateComment, files });
@@ -355,9 +350,11 @@ describe('run()', () => {
     await import('./index');
     await flushRun();
 
-    // Should have been called exactly once — no haiku retry on a 2-line mic drop
-    expect(callCount).toBe(1);
-    expect(mockCreateComment).toHaveBeenCalled();
+    const body: string = mockCreateComment.mock.calls[0][0].body;
+    // All 3 haiku lines must be present — mic drop truncation did NOT fire
+    expect(body).toContain('code lands on the branch');
+    expect(body).toContain('lines shift and the diff grows small');
+    expect(body).toContain('haiku endures all');
   });
 
   it.each([
