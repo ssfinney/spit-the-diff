@@ -13,6 +13,7 @@ function makeOctokit({
   files = [] as Array<Record<string, unknown>>,
   createComment = vi.fn().mockResolvedValue({}),
   updateComment = vi.fn().mockResolvedValue({}),
+  deleteComment = vi.fn().mockResolvedValue({}),
 } = {}) {
   const rest = {
     pulls: {
@@ -23,6 +24,7 @@ function makeOctokit({
       listComments: vi.fn(),
       createComment,
       updateComment,
+      deleteComment,
     },
   };
   return {
@@ -250,6 +252,32 @@ describe('run()', () => {
     expect(mockCreateComment).not.toHaveBeenCalled();
   });
 
+  it('deletes stale bot comment when diff falls below min_diff_lines', async () => {
+    const llmCreate = makeLLMCreate();
+    const mockDeleteComment = vi.fn().mockResolvedValue({});
+    const staleComment = { id: 42, body: '<!-- spit-the-diff:hash=aabbccdd1122 -->\nold content' };
+    const files = [{ filename: 'README.md', status: 'modified', additions: 0, deletions: 0 }];
+    const octokit = makeOctokit({ existingComments: [staleComment], deleteComment: mockDeleteComment, files });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ min_diff_lines: '5' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'synchronize' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    expect(llmCreate).not.toHaveBeenCalled();
+    expect(mockDeleteComment).toHaveBeenCalledWith(
+      expect.objectContaining({ comment_id: staleComment.id })
+    );
+  });
+
   it('does not skip when diff meets min_diff_lines threshold', async () => {
     const llmCreate = makeLLMCreate('passes threshold');
     const mockCreateComment = vi.fn().mockResolvedValue({});
@@ -299,6 +327,37 @@ describe('run()', () => {
     expect(body).toContain('first line');
     expect(body).toContain('second line');
     expect(body).not.toContain('third line should be cut');
+  });
+
+  it('mic drop with haiku format does not trigger haiku 3-line retry', async () => {
+    // Return only 2 lines — a haiku retry would incorrectly fire here without the fix.
+    let callCount = 0;
+    const llmCreate = vi.fn().mockImplementation(() => {
+      callCount++;
+      return Promise.resolve({
+        choices: [{ finish_reason: 'stop', message: { content: 'one liner drop\nsecond rhyme here' } }],
+      });
+    });
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const files = [{ filename: 'src/index.ts', status: 'modified', additions: 2, deletions: 1 }];
+    const octokit = makeOctokit({ createComment: mockCreateComment, files });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ format: 'haiku', mic_drop_threshold: '20' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    // Should have been called exactly once — no haiku retry on a 2-line mic drop
+    expect(callCount).toBe(1);
+    expect(mockCreateComment).toHaveBeenCalled();
   });
 
   it.each([

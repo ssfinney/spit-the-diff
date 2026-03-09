@@ -226,6 +226,10 @@ async function run(): Promise<void> {
   const minDiffLines = parseInt(core.getInput('min_diff_lines') || '0', 10);
   if (minDiffLines > 0 && totalLines < minDiffLines) {
     core.info(`Diff is only ${totalLines} non-noise lines (threshold: ${minDiffLines}). Skipping.`);
+    if (existingComment) {
+      core.info('Deleting stale bot comment (diff is now below min_diff_lines threshold).');
+      await octokit.rest.issues.deleteComment({ owner, repo, comment_id: existingComment.id });
+    }
     return;
   }
 
@@ -243,8 +247,13 @@ async function run(): Promise<void> {
   core.info(`Building ${effectiveFormat} prompt...`);
   const prompt = isMicDrop ? buildMicDropPrompt(summary) : buildPrompt(effectiveFormat, summary);
 
+  // Mic drop needs exactly 2 lines — skip the haiku 3-line retry check by using
+  // 'rap' as the generation format. The empty-output retry in generateWithHaikuRetry
+  // still applies, and the 2-line slice happens after posting.
+  const generationFormat = isMicDrop ? 'rap' : effectiveFormat;
+
   core.info(`Calling ${model}...`);
-  let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
+  let finalText = await generateWithHaikuRetry(client, model, prompt, generationFormat);
 
   if (enableModeration) {
     core.info('Running moderation check...');
@@ -252,7 +261,7 @@ async function run(): Promise<void> {
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
       const safeRetryPrompt = `${prompt}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.`;
-      const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
+      const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, generationFormat);
       const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {
         core.warning('Second attempt also flagged by moderation. Using fallback message.');
