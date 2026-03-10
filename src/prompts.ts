@@ -22,11 +22,11 @@ Requirements:
 - Do not use bullet points or numbering
 - Output only the verse, no title or explanation
 
-Example of the style (do not copy — write something new for the actual diff):
-fetchPRData now takes maxFiles for free,
-compressing the diff so the LLM can see,
-ranked by additions, we're dropping the locks,
-and truncating patches to sixty-line blocks.
+Example of the style — rhythm and specificity, not content (write something original for the actual diff):
+Two functions merged, the helper's gone for good,
+the loop runs tighter than we thought it would,
+a config flag replaced a hardcoded string,
+now staging matches prod in everything.
 
 ${PROMPT_FOOTER}`,
 
