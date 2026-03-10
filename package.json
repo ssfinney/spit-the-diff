@@ -7,6 +7,7 @@
     "build": "tsc --noEmit && ncc build src/index.ts -o dist --source-map --license licenses.txt",
     "build:watch": "tsc --watch",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
   },
   "keywords": [
@@ -29,6 +30,7 @@
     "@types/node": "^20.14.0",
     "@vercel/ncc": "^0.38.1",
     "typescript": "^5.5.0",
+    "@vitest/coverage-v8": "^4.0.18",
     "vitest": "^4.0.18"
   }
 }
