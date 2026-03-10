@@ -120,7 +120,6 @@ async function callLLM(client: OpenAI, model: string, prompt: string): Promise<s
   const response = await client.chat.completions.create({
     model,
     messages: [{ role: 'user', content: prompt }],
-    temperature: 1.1,
   });
 
   const choice = response.choices[0];

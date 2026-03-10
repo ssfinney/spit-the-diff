@@ -35754,7 +35754,6 @@ async function callLLM(client, model, prompt) {
     const response = await client.chat.completions.create({
         model,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 1.1,
     });
     const choice = response.choices[0];
     core.info(`LLM finish_reason: ${choice?.finish_reason ?? 'unknown'}`);
