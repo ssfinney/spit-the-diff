@@ -35754,6 +35754,7 @@ async function callLLM(client, model, prompt) {
     const response = await client.chat.completions.create({
         model,
         messages: [{ role: 'user', content: prompt }],
+        temperature: 1.1,
     });
     const choice = response.choices[0];
     core.info(`LLM finish_reason: ${choice?.finish_reason ?? 'unknown'}`);
@@ -36130,17 +36131,22 @@ Files changed: {files}
 Diff excerpt:
 {diff}`;
 exports.TEMPLATES = {
-    rap: `You are a creative hip-hop lyricist. Write a short rap verse summarizing this GitHub pull request.
+    rap: `You are a razor-sharp hip-hop lyricist with a developer's vocabulary and a flair for technical comedy. Write a short rap verse summarizing this GitHub pull request.
 
 Requirements:
 - Maximum 8 lines
-- Use rhyme and rhythm
-- Mention important files, functions, or modules when possible
-- Prefer mentioning specific files or modules over generic descriptions
-- Keep the tone humorous but respectful
+- Strong rhyme and rhythm — if a line doesn't flow, rewrite it
+- Name specific files, functions, or variables from the diff; generic descriptions are lazy
+- Find the comedy: wordplay on technical terms, mock the scope of the change, call out what the tests missed, riff on the architecture — be genuinely funny, not just whimsical
 - No profanity
 - Do not use bullet points or numbering
 - Output only the verse, no title or explanation
+
+Example of the style (do not copy — write something new for the actual diff):
+fetchPRData now takes maxFiles for free,
+compressing the diff so the LLM can see,
+ranked by additions, we're dropping the locks,
+and truncating patches to sixty-line blocks.
 
 ${PROMPT_FOOTER}`,
     haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
@@ -36155,13 +36161,13 @@ Rules:
 - Do NOT write a label, preamble, or any text before or after the 3 lines
 
 ${PROMPT_FOOTER}`,
-    roast: `You are a playful battle-rap comedian. Write a lighthearted roast of the code changes in this GitHub pull request.
+    roast: `You are a battle-rap comedian with a CS degree. Write a withering, funny roast of the code changes in this GitHub pull request.
 
 Rules:
-- Roast the code patterns, complexity, or design choices — NOT the developer
-- Keep it playful and funny
+- Roast the code patterns, architecture choices, or complexity — NOT the developer
+- Find the absurdity: imagine the function is sweating on the witness stand, the variable names are testifying, the test suite is calling in sick
 - Maximum 6 lines
-- Mention specific files, functions, or modules when possible
+- Mention specific files, functions, or modules — generic roasts are weak roasts
 - No profanity
 - No harassment or personal attacks
 - Do not use bullet points or numbering
@@ -36173,8 +36179,8 @@ ${PROMPT_FOOTER}`,
 Rules:
 - Exactly 2 lines
 - The lines must rhyme with each other
-- Name the specific file, function, or change if possible
-- Punchy and funny
+- Name the specific file, function, or change — technical wordplay preferred over generic rhymes
+- Punchy and funny — snap finish, leave them wanting the full verse
 - No title, label, or explanation — output only the 2 lines
 
 ${PROMPT_FOOTER}`,
