@@ -5,6 +5,8 @@ import {
   truncatePatchLines,
   buildCompressedDiff,
   buildPrompt,
+  buildMicDropPrompt,
+  countDiffLines,
   removeLeadingMetaLine,
   normalizeUnicode,
   sanitizeOutput,
@@ -13,6 +15,7 @@ import {
   MODERATION_FALLBACK,
   COMMENT_MARKER_REGEX,
   NOISE_FILE_PATTERNS,
+  MIC_DROP_MAX_LINES,
   type PRFile,
   type PRSummary,
 } from './lib';
@@ -480,5 +483,76 @@ describe('MODERATION_FALLBACK', () => {
   it('is a non-empty string', () => {
     expect(typeof MODERATION_FALLBACK).toBe('string');
     expect(MODERATION_FALLBACK.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── countDiffLines ───────────────────────────────────────────────────────────
+
+describe('countDiffLines', () => {
+  it('returns 0 for an empty file list', () => {
+    expect(countDiffLines([])).toBe(0);
+  });
+
+  it('sums additions and deletions for non-noise files', () => {
+    const files: PRFile[] = [
+      makeFile({ filename: 'src/index.ts', additions: 10, deletions: 4 }),
+      makeFile({ filename: 'src/lib.ts', additions: 3, deletions: 1 }),
+    ];
+    expect(countDiffLines(files)).toBe(18);
+  });
+
+  it('excludes noise files from the count', () => {
+    const files: PRFile[] = [
+      makeFile({ filename: 'package-lock.json', additions: 5000, deletions: 5000 }),
+      makeFile({ filename: 'dist/index.js', additions: 2000, deletions: 1000 }),
+      makeFile({ filename: 'src/index.ts', additions: 5, deletions: 2 }),
+    ];
+    expect(countDiffLines(files)).toBe(7);
+  });
+
+  it('returns 0 when all files are noise', () => {
+    const files: PRFile[] = [
+      makeFile({ filename: 'yarn.lock', additions: 100, deletions: 50 }),
+      makeFile({ filename: 'dist/bundle.js', additions: 200, deletions: 100 }),
+    ];
+    expect(countDiffLines(files)).toBe(0);
+  });
+});
+
+// ─── buildMicDropPrompt ───────────────────────────────────────────────────────
+
+describe('buildMicDropPrompt', () => {
+  const summary: PRSummary = {
+    title: 'Fix the thing',
+    body: 'Fixes a bug',
+    files: [],
+    filesText: 'src/index.ts | modified | +1/-0',
+    diffPayload: '+ fixed it',
+  };
+
+  it('substitutes all placeholders', () => {
+    const prompt = buildMicDropPrompt(summary);
+    expect(prompt).toContain('Fix the thing');
+    expect(prompt).toContain('Fixes a bug');
+    expect(prompt).toContain('src/index.ts | modified | +1/-0');
+    expect(prompt).toContain('+ fixed it');
+  });
+
+  it('uses "(none)" when body is empty', () => {
+    const prompt = buildMicDropPrompt({ ...summary, body: '' });
+    expect(prompt).toContain('(none)');
+  });
+
+  it('mentions "2 lines" in the prompt text', () => {
+    const prompt = buildMicDropPrompt(summary);
+    expect(prompt).toContain('2 line');
+  });
+});
+
+// ─── MIC_DROP_MAX_LINES ───────────────────────────────────────────────────────
+
+describe('MIC_DROP_MAX_LINES', () => {
+  it('is 2', () => {
+    expect(MIC_DROP_MAX_LINES).toBe(2);
   });
 });

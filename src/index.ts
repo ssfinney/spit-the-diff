@@ -6,15 +6,20 @@ import {
   type PRSummary,
   type ExistingBotComment,
   DEFAULT_TOP_FILES,
+  DEFAULT_MAX_PATCH_LINES,
+  MAX_PROMPT_DIFF_CHARS,
   COMMENT_MARKER_REGEX,
   MODERATION_FALLBACK,
+  MIC_DROP_MAX_LINES,
   parseFormat,
   buildPrompt,
+  buildMicDropPrompt,
   sanitizeOutput,
   buildInputHash,
   buildCommentBody,
   formatFilesList,
   buildCompressedDiff,
+  countDiffLines,
 } from './lib';
 
 async function findExistingBotComment(
@@ -56,7 +61,9 @@ async function fetchPRData(
   owner: string,
   repo: string,
   prNumber: number,
-  maxFiles: number = DEFAULT_TOP_FILES
+  maxFiles: number = DEFAULT_TOP_FILES,
+  maxPatchLines: number = DEFAULT_MAX_PATCH_LINES,
+  maxPromptChars: number = MAX_PROMPT_DIFF_CHARS
 ): Promise<PRSummary> {
   const [{ data: pr }, files] = await Promise.all([
     octokit.rest.pulls.get({ owner, repo, pull_number: prNumber }),
@@ -81,7 +88,7 @@ async function fetchPRData(
     body: pr.body ?? '',
     files: normalizedFiles,
     filesText: formatFilesList(normalizedFiles),
-    diffPayload: buildCompressedDiff(normalizedFiles, maxFiles),
+    diffPayload: buildCompressedDiff(normalizedFiles, maxFiles, maxPatchLines, maxPromptChars),
   };
 }
 
@@ -156,6 +163,7 @@ async function run(): Promise<void> {
   const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
   const roastLabel = core.getInput('roast_label') || 'roast-me';
   const enableModeration = core.getInput('enable_moderation') !== 'false';
+  const skipDrafts = core.getInput('skip_drafts') === 'true';
 
   if (!openaiApiKey) {
     core.setFailed('openai_api_key input is required');
@@ -172,6 +180,11 @@ async function run(): Promise<void> {
 
   if (!pr) {
     core.setFailed('This action only runs on pull_request events');
+    return;
+  }
+
+  if (skipDrafts && pr.draft) {
+    core.info('PR is in draft status. Skipping. Add "ready_for_review" to pull_request.types to trigger when the PR is marked ready.');
     return;
   }
 
@@ -206,11 +219,37 @@ async function run(): Promise<void> {
   core.info('Fetching PR metadata and file patches...');
   const maxFilesRaw = parseInt(core.getInput('max_files') || String(DEFAULT_TOP_FILES), 10);
   const maxFiles = Number.isFinite(maxFilesRaw) && maxFilesRaw > 0 ? maxFilesRaw : DEFAULT_TOP_FILES;
+  const maxPatchLinesRaw = parseInt(core.getInput('max_patch_lines') || String(DEFAULT_MAX_PATCH_LINES), 10);
+  const maxPatchLines = Number.isFinite(maxPatchLinesRaw) && maxPatchLinesRaw > 0 ? maxPatchLinesRaw : DEFAULT_MAX_PATCH_LINES;
+  const maxPromptCharsRaw = parseInt(core.getInput('max_prompt_chars') || String(MAX_PROMPT_DIFF_CHARS), 10);
+  const maxPromptChars = Number.isFinite(maxPromptCharsRaw) && maxPromptCharsRaw > 0 ? maxPromptCharsRaw : MAX_PROMPT_DIFF_CHARS;
   const [summary, existingComment] = await Promise.all([
-    fetchPRData(octokit, owner, repo, prNumber, maxFiles),
+    fetchPRData(octokit, owner, repo, prNumber, maxFiles, maxPatchLines, maxPromptChars),
     findExistingBotComment(octokit, owner, repo, prNumber),
   ]);
   const inputHash = buildInputHash(effectiveFormat, model, summary);
+
+  const totalLines = countDiffLines(summary.files);
+
+  const minDiffLines = parseInt(core.getInput('min_diff_lines') || '0', 10);
+  if (minDiffLines > 0 && totalLines < minDiffLines) {
+    core.info(`Diff is only ${totalLines} non-noise lines (threshold: ${minDiffLines}). Skipping.`);
+    if (existingComment) {
+      core.info('Deleting stale bot comment (diff is now below min_diff_lines threshold).');
+      await octokit.rest.issues.deleteComment({ owner, repo, comment_id: existingComment.id });
+    }
+    return;
+  }
+
+  const micDropThreshold = parseInt(core.getInput('mic_drop_threshold') || '0', 10);
+  // Haiku is already a minimal 3-line format — mic drop (2 lines) would produce a non-haiku,
+  // so we skip mic drop mode entirely when haiku is selected.
+  const isMicDrop = micDropThreshold > 0 && totalLines < micDropThreshold && effectiveFormat !== 'haiku';
+  if (isMicDrop) {
+    core.info(`Small diff (${totalLines} non-noise lines). Using mic drop mode.`);
+  } else if (micDropThreshold > 0 && totalLines < micDropThreshold && effectiveFormat === 'haiku') {
+    core.info(`Small diff (${totalLines} non-noise lines) but haiku format selected — skipping mic drop.`);
+  }
 
   if (action === 'synchronize' && existingComment?.hash === inputHash) {
     core.info('Input hash unchanged on synchronize event. Skipping LLM call and comment update.');
@@ -218,7 +257,7 @@ async function run(): Promise<void> {
   }
 
   core.info(`Building ${effectiveFormat} prompt...`);
-  const prompt = buildPrompt(effectiveFormat, summary);
+  const prompt = isMicDrop ? buildMicDropPrompt(summary) : buildPrompt(effectiveFormat, summary);
 
   core.info(`Calling ${model}...`);
   let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
@@ -238,6 +277,10 @@ async function run(): Promise<void> {
         finalText = retryText;
       }
     }
+  }
+
+  if (isMicDrop) {
+    finalText = finalText.split('\n').slice(0, MIC_DROP_MAX_LINES).join('\n').trim();
   }
 
   core.info(existingComment ? 'Updating existing bot comment on PR...' : 'Creating bot comment on PR...');
