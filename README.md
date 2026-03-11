@@ -8,7 +8,7 @@ A GitHub Action that turns pull request diffs into rap verses, haiku, or code ro
 
 ## Quick Start
 
-Want to get this running in under 2 minutes?
+2 minute start:
 
 1. Create `.github/workflows/spit-the-diff.yml` in your repo:
 
@@ -34,7 +34,7 @@ jobs:
 ```
 
 2. Add `OPENAI_API_KEY` as a repository secret.
-3. Open or update a PR — the bot posts and updates one persistent comment.
+3. Open or update a PR and the bot posts and updates one persistent comment.
 
 That’s it. Customize format and other options in [Inputs](#inputs).
 
