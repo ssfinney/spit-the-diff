@@ -457,7 +457,7 @@ describe('buildCommentBody', () => {
   });
 
   it('includes the correct header for rap', () => {
-    expect(buildCommentBody('rap', content, hash)).toContain('🎤 **Diff Cypher**');
+    expect(buildCommentBody('rap', content, hash)).toContain('🎤 **Diff Rap**');
   });
 
   it('includes the correct header for haiku', () => {

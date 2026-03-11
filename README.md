@@ -6,6 +6,40 @@ A GitHub Action that turns pull request diffs into rap verses, haiku, or code ro
 
 ---
 
+## Quick Start
+
+2 minute start:
+
+1. Create `.github/workflows/spit-the-diff.yml` in your repo:
+
+```yaml
+name: spit-the-diff
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+jobs:
+  rap-summary:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ssfinney/spit-the-diff@v1
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+```
+
+2. Add `OPENAI_API_KEY` as a repository secret.
+3. Open or update a PR and the bot posts and updates one persistent comment.
+
+That’s it. Customize format and other options in [Inputs](#inputs).
+
+---
+
 ## Example Output
 
 **Rap mode (default):**
@@ -152,7 +186,7 @@ Supply **exactly one** of the following:
 | `max_files` | Max changed files included in the diff payload | `6` |
 | `roast_label` | PR label that enables roast mode | `roast-me` |
 | `enable_moderation` | Run OpenAI moderation on output before posting. Only applies when using the `openai` provider; silently skipped for all others. | `false` |
-| `skip_drafts` | Skip draft PRs entirely | `true` |
+| `skip_drafts` | Skip draft PRs. Add "ready_for_review" to pull_request.types to re-trigger when the PR is marked ready | `true` |
 | `min_diff_lines` | Skip if non-noise diff lines are below this threshold (`0` disables) | `0` |
 | `mic_drop_threshold` | Use a 2-line mic-drop output below this diff-line threshold (`0` disables) | `0` |
 | `max_patch_lines` | Max lines per file patch included in the diff payload | `60` |
@@ -202,7 +236,6 @@ Output cleanup guardrails are applied before commenting:
 
 ---
 
-
 ## Event + Cost Guardrails
 
 The action includes built-in protections to reduce noisy runs and comment spam:
@@ -232,7 +265,7 @@ See [SPEC.md](./SPEC.md) for the full project specification and architecture ove
 
 Install dependencies and build locally:
 
-```
+```bash
 npm install
 npm run build
 ```
