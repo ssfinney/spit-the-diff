@@ -3,6 +3,7 @@ import * as github from '@actions/github';
 import OpenAI from 'openai';
 import {
   type Format,
+  type Provider,
   type PRSummary,
   type ExistingBotComment,
   DEFAULT_TOP_FILES,
@@ -11,6 +12,7 @@ import {
   COMMENT_MARKER_REGEX,
   MODERATION_FALLBACK,
   MIC_DROP_MAX_LINES,
+  PROVIDER_CONFIGS,
   parseFormat,
   buildPrompt,
   buildMicDropPrompt,
@@ -21,6 +23,44 @@ import {
   buildCompressedDiff,
   countDiffLines,
 } from './lib';
+
+const PROVIDER_KEY_INPUTS: Record<Provider, string> = {
+  openai:      'openai_api_key',
+  anthropic:   'anthropic_api_key',
+  google:      'google_api_key',
+  openrouter:  'openrouter_api_key',
+  huggingface: 'huggingface_api_key',
+  groq:        'groq_api_key',
+  mistral:     'mistral_api_key',
+  together:    'together_api_key',
+};
+
+export function resolveProvider(): { provider: Provider; apiKey: string; baseURL?: string; defaultModel: string } {
+  const found: Array<{ provider: Provider; apiKey: string }> = [];
+
+  for (const [provider, inputName] of Object.entries(PROVIDER_KEY_INPUTS) as Array<[Provider, string]>) {
+    const key = core.getInput(inputName);
+    if (key) {
+      found.push({ provider, apiKey: key });
+    }
+  }
+
+  if (found.length === 0) {
+    throw new Error(
+      'No API key provided. Supply exactly one of: openai_api_key, anthropic_api_key, google_api_key, ' +
+      'openrouter_api_key, huggingface_api_key, groq_api_key, mistral_api_key, or together_api_key.'
+    );
+  }
+
+  if (found.length > 1) {
+    const names = found.map(f => PROVIDER_KEY_INPUTS[f.provider]).join(', ');
+    throw new Error(`Multiple API keys provided (${names}). Supply exactly one.`);
+  }
+
+  const { provider, apiKey } = found[0];
+  const config = PROVIDER_CONFIGS[provider];
+  return { provider, apiKey, baseURL: config.baseURL, defaultModel: config.defaultModel };
+}
 
 async function findExistingBotComment(
   octokit: ReturnType<typeof github.getOctokit>,
@@ -158,16 +198,24 @@ async function upsertComment(
 
 async function run(): Promise<void> {
   const format = parseFormat(core.getInput('format') || 'rap');
-  const model = core.getInput('model') || 'gpt-4.1-mini';
-  const openaiApiKey = core.getInput('openai_api_key');
   const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
   const roastLabel = core.getInput('roast_label') || 'roast-me';
   const enableModeration = core.getInput('enable_moderation') !== 'false';
   const skipDrafts = core.getInput('skip_drafts') === 'true';
 
-  if (!openaiApiKey) {
-    core.setFailed('openai_api_key input is required');
+  let providerInfo: ReturnType<typeof resolveProvider>;
+  try {
+    providerInfo = resolveProvider();
+  } catch (err) {
+    core.setFailed(err instanceof Error ? err.message : String(err));
     return;
+  }
+
+  const { provider, apiKey, baseURL, defaultModel } = providerInfo;
+  const model = core.getInput('model') || defaultModel;
+
+  if (enableModeration && provider !== 'openai') {
+    core.warning(`enable_moderation is only supported with the openai provider. Skipping moderation for provider "${provider}".`);
   }
 
   if (!githubToken) {
@@ -189,7 +237,9 @@ async function run(): Promise<void> {
   }
 
   const octokit = github.getOctokit(githubToken);
-  const client = new OpenAI({ apiKey: openaiApiKey });
+  const clientOptions: ConstructorParameters<typeof OpenAI>[0] = { apiKey };
+  if (baseURL) clientOptions.baseURL = baseURL;
+  const client = new OpenAI(clientOptions);
   const { owner, repo } = ctx.repo;
   const prNumber = pr.number as number;
   const action = ctx.payload.action;
@@ -262,7 +312,7 @@ async function run(): Promise<void> {
   core.info(`Calling ${model}...`);
   let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
 
-  if (enableModeration) {
+  if (enableModeration && provider === 'openai') {
     core.info('Running moderation check...');
     const flagged = await moderateText(client, finalText);
     if (flagged) {
