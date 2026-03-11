@@ -150,7 +150,7 @@ Do not print the key in logs or echo commands in CI.
 | `max_files` | Max changed files included in the diff payload | `6` |
 | `roast_label` | PR label that enables roast mode | `roast-me` |
 | `enable_moderation` | Run OpenAI moderation on output before posting | `false` |
-| `skip_drafts` | Skip draft PRs entirely | `true` |
+| `skip_drafts` | Skip draft PRs. Add "ready_for_review" to pull_request.types to re-trigger when the PR is marked ready | `true` |
 | `min_diff_lines` | Skip if non-noise diff lines are below this threshold (`0` disables) | `0` |
 | `mic_drop_threshold` | Use a 2-line mic-drop output below this diff-line threshold (`0` disables) | `0` |
 | `max_patch_lines` | Max lines per file patch included in the diff payload | `60` |
