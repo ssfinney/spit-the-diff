@@ -11,6 +11,7 @@ The goal is to make pull requests more engaging and easier to skim by turning co
 ## Goals
 
 ### Primary Goals
+
 - Summarize pull requests in an entertaining and readable format.
 - Improve developer engagement with PR changes.
 - Provide a simple GitHub Action that works with minimal configuration.
@@ -21,6 +22,7 @@ The goal is to make pull requests more engaging and easier to skim by turning co
 ## Core Features (v1)
 
 ### 1. Rap Summary
+
 Default mode. Generates a short rap verse summarizing the PR changes.
 
 **Example output:**
@@ -33,6 +35,7 @@ Default mode. Generates a short rap verse summarizing the PR changes.
 > Ship the patch forward — auth back in sight.
 
 **Constraints:**
+
 - 6–8 lines
 - rhyme encouraged
 - humorous but respectful
@@ -41,6 +44,7 @@ Default mode. Generates a short rap verse summarizing the PR changes.
 ---
 
 ### 2. Haiku Summary
+
 Alternative format for minimal poetic summaries.
 
 **Example:**
@@ -52,6 +56,7 @@ Alternative format for minimal poetic summaries.
 > Auth returns to life
 
 **Constraints:**
+
 - 3 lines
 - approximate 5-7-5 structure
 - highlight main PR change
@@ -59,6 +64,7 @@ Alternative format for minimal poetic summaries.
 ---
 
 ### 3. Roast Mode (Label Triggered)
+
 When a PR contains the label `roast-me`, the bot switches to playful roast mode.
 
 **Example:**
@@ -71,6 +77,7 @@ When a PR contains the label `roast-me`, the bot switches to playful roast mode.
 > Or production logs gonna make you pay.
 
 **Constraints:**
+
 - roast the **code**, not the developer
 - no harassment or slurs
 - playful tone only
@@ -146,7 +153,7 @@ If the PR contains the label `roast-me`, the action switches to roast mode autom
 
 ## Architecture Overview
 
-```
+```text
 GitHub PR Event
       │
       ▼
@@ -177,7 +184,8 @@ GitHub Comment
 Each format uses a dedicated prompt template located in `prompts/`.
 
 ### Rap Prompt
-```
+
+```text
 Write an 8-line hip-hop verse summarizing this pull request.
 
 Requirements:
@@ -188,7 +196,8 @@ Requirements:
 ```
 
 ### Haiku Prompt
-```
+
+```text
 Write a haiku summarizing the key change in this pull request.
 
 Format:
@@ -198,7 +207,8 @@ Format:
 ```
 
 ### Roast Prompt
-```
+
+```text
 Write a playful battle-rap roast about this code change.
 
 Rules:
@@ -212,6 +222,7 @@ Rules:
 ## Cost Considerations
 
 The action minimizes token usage by:
+
 - sending summarized diffs (not raw diffs)
 - limiting response length
 - using small efficient models (e.g., `gpt-4o-mini`)
@@ -223,6 +234,7 @@ Estimated cost per PR: fractions of a cent.
 ## Safety Guidelines
 
 The system:
+
 - avoids harassment
 - avoids profanity (enforced via OpenAI moderation API, enabled by default)
 - avoids personal attacks
@@ -233,7 +245,7 @@ Roasts must target code quality only.
 
 ## Repository Structure
 
-```
+```text
 spit-the-diff/
 │
 ├─ action.yml
