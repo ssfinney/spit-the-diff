@@ -97,20 +97,39 @@ jobs:
         with:
           format: rap
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          # or use any other supported provider, e.g.:
+          # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # groq_api_key: ${{ secrets.GROQ_API_KEY }}
 ```
 
-### 2) Add your OpenAI API key as a secret
+### 2) Add your API key as a secret
 
-Create an encrypted secret named `OPENAI_API_KEY` in your repository settings:
+The action supports **8 AI providers**. Pick one and add its API key as a repository secret:
 
 - **GitHub → Repository → Settings → Secrets and variables → Actions → New repository secret**
-- Name: `OPENAI_API_KEY`
-- Value: your OpenAI API key
 
-Then reference it exactly like this in the workflow:
+Then supply the matching input in your workflow. Use **exactly one** — the action errors if none or multiple are provided.
+
+| Provider | Input | Secret name (example) |
+|----------|-------|----------------------|
+| **OpenAI** (default) | `openai_api_key` | `OPENAI_API_KEY` |
+| Anthropic (Claude) | `anthropic_api_key` | `ANTHROPIC_API_KEY` |
+| Google (Gemini) | `google_api_key` | `GOOGLE_API_KEY` |
+| OpenRouter | `openrouter_api_key` | `OPENROUTER_API_KEY` |
+| HuggingFace | `huggingface_api_key` | `HUGGINGFACE_API_KEY` |
+| Groq | `groq_api_key` | `GROQ_API_KEY` |
+| Mistral | `mistral_api_key` | `MISTRAL_API_KEY` |
+| Together AI | `together_api_key` | `TOGETHER_API_KEY` |
+
+Example using Anthropic:
 
 ```yaml
-openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+      - name: Generate PR summary
+        uses: ssfinney/spit-the-diff@v1
+        with:
+          format: rap
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: claude-haiku-4-5-20251001
 ```
 
 ### 3) Open a PR
@@ -125,9 +144,9 @@ When a pull request is opened or updated, the action maintains one persistent bo
 
 Use these practices to keep your key secure:
 
-- **Always use GitHub Secrets** (`secrets.OPENAI_API_KEY`) instead of hardcoding keys.
+- **Always use GitHub Secrets** (e.g. `secrets.OPENAI_API_KEY`) instead of hardcoding keys.
 - **Never commit `.env` files** or keys to source control.
-- **Prefer least privilege:** use a dedicated OpenAI key for this action with usage limits/monitoring.
+- **Prefer least privilege:** use a dedicated key for this action with usage limits/monitoring.
 - **Use organization secrets** if multiple repos share this action.
 - **Rotate keys immediately** if exposed in logs, commits, or screenshots.
 
@@ -143,19 +162,35 @@ Do not print the key in logs or echo commands in CI.
 
 ## Inputs
 
+### Provider API keys
+
+Supply **exactly one** of the following:
+
+| Input | Provider | Default model |
+|-------|----------|---------------|
+| `openai_api_key` | OpenAI | `gpt-4.1-mini` |
+| `anthropic_api_key` | Anthropic (Claude) | `claude-haiku-4-5-20251001` |
+| `google_api_key` | Google (Gemini) | `gemini-2.0-flash` |
+| `openrouter_api_key` | OpenRouter | `openai/gpt-4.1-mini` |
+| `huggingface_api_key` | HuggingFace | `Qwen/Qwen2.5-Coder-32B-Instruct` |
+| `groq_api_key` | Groq | `llama-3.3-70b-versatile` |
+| `mistral_api_key` | Mistral | `mistral-small-latest` |
+| `together_api_key` | Together AI | `meta-llama/Llama-3.3-70B-Instruct-Turbo` |
+
+### Other inputs
+
 | Input | Description | Default |
 |-------|-------------|---------|
 | `format` | Output format: `rap`, `haiku`, or `roast` | `rap` |
-| `model` | OpenAI model to use | `gpt-4.1-mini` |
+| `model` | Model to use for generation. Overrides the provider default. Must be a valid model ID for your chosen provider. | *(provider default)* |
 | `max_files` | Max changed files included in the diff payload | `6` |
 | `roast_label` | PR label that enables roast mode | `roast-me` |
-| `enable_moderation` | Run OpenAI moderation on output before posting | `false` |
+| `enable_moderation` | Run OpenAI moderation on output before posting. Only applies when using the `openai` provider; silently skipped for all others. | `false` |
 | `skip_drafts` | Skip draft PRs. Add "ready_for_review" to pull_request.types to re-trigger when the PR is marked ready | `true` |
 | `min_diff_lines` | Skip if non-noise diff lines are below this threshold (`0` disables) | `0` |
 | `mic_drop_threshold` | Use a 2-line mic-drop output below this diff-line threshold (`0` disables) | `0` |
 | `max_patch_lines` | Max lines per file patch included in the diff payload | `60` |
 | `max_prompt_chars` | Max diff payload characters before falling back to summary-only mode | `30000` |
-| `openai_api_key` | Your OpenAI API key (**required**) | — |
 | `github_token` | GitHub token for posting comments | `${{ github.token }}` |
 
 ---
@@ -197,7 +232,7 @@ Output cleanup guardrails are applied before commenting:
 - Strips accidental headers/titles and bullet prefixes
 - Enforces line limits (`rap <= 8`, `roast <= 6`)
 - Enforces `haiku` as exactly 3 lines (one retry if output is short)
-- Runs OpenAI moderation on output; retries once on a flag, then uses a safe fallback message (disable with `enable_moderation: false`)
+- Runs OpenAI moderation on output when `enable_moderation: true` and the `openai` provider is in use; retries once on a flag, then uses a safe fallback message
 
 ---
 
@@ -210,7 +245,17 @@ The action includes built-in protections to reduce noisy runs and comment spam:
 
 ## Cost
 
-Uses `gpt-4.1-mini` by default. Estimated cost: **fractions of a cent per PR**.
+Cost depends on your chosen provider and model. The OpenAI default (`gpt-4.1-mini`) typically costs **fractions of a cent per PR** given the small prompt sizes.
+
+Several providers offer free tiers or lower per-token rates than OpenAI — for example:
+
+- **Groq** (`llama-3.3-70b-versatile`) — fast inference, generous free tier
+- **Google** (`gemini-2.0-flash`) — competitive rates, free tier available
+- **HuggingFace** (`Qwen/Qwen2.5-Coder-32B-Instruct`) — free serverless inference for many models
+- **OpenRouter** — aggregates many models; pay-per-token across providers
+- **Together AI** — competitive open-model pricing
+
+For any provider, prompt sizes here are small (typically under 2 000 tokens), so even paid tiers cost less than a cent per run. See your provider's pricing page for exact rates.
 
 ---
 
