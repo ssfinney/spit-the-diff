@@ -201,7 +201,6 @@ Output cleanup guardrails are applied before commenting:
 
 ---
 
-
 ## Event + Cost Guardrails
 
 The action includes built-in protections to reduce noisy runs and comment spam:
@@ -221,7 +220,7 @@ See [SPEC.md](./SPEC.md) for the full project specification and architecture ove
 
 Install dependencies and build locally:
 
-```
+```bash
 npm install
 npm run build
 ```
