@@ -35680,10 +35680,41 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.resolveProvider = resolveProvider;
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const openai_1 = __importDefault(__nccwpck_require__(2583));
 const lib_1 = __nccwpck_require__(5704);
+const PROVIDER_KEY_INPUTS = {
+    openai: 'openai_api_key',
+    anthropic: 'anthropic_api_key',
+    google: 'google_api_key',
+    openrouter: 'openrouter_api_key',
+    huggingface: 'huggingface_api_key',
+    groq: 'groq_api_key',
+    mistral: 'mistral_api_key',
+    together: 'together_api_key',
+};
+function resolveProvider() {
+    const found = [];
+    for (const [provider, inputName] of Object.entries(PROVIDER_KEY_INPUTS)) {
+        const key = core.getInput(inputName);
+        if (key) {
+            found.push({ provider, apiKey: key });
+        }
+    }
+    if (found.length === 0) {
+        throw new Error('No API key provided. Supply exactly one of: openai_api_key, anthropic_api_key, google_api_key, ' +
+            'openrouter_api_key, huggingface_api_key, groq_api_key, mistral_api_key, or together_api_key.');
+    }
+    if (found.length > 1) {
+        const names = found.map(f => PROVIDER_KEY_INPUTS[f.provider]).join(', ');
+        throw new Error(`Multiple API keys provided (${names}). Supply exactly one.`);
+    }
+    const { provider, apiKey } = found[0];
+    const config = lib_1.PROVIDER_CONFIGS[provider];
+    return { provider, apiKey, baseURL: config.baseURL, defaultModel: config.defaultModel };
+}
 async function findExistingBotComment(octokit, owner, repo, prNumber) {
     const comments = await octokit.paginate(octokit.rest.issues.listComments, {
         owner,
@@ -35778,15 +35809,22 @@ async function upsertComment(octokit, owner, repo, prNumber, format, content, in
 }
 async function run() {
     const format = (0, lib_1.parseFormat)(core.getInput('format') || 'rap');
-    const model = core.getInput('model') || 'gpt-4.1-mini';
-    const openaiApiKey = core.getInput('openai_api_key');
     const githubToken = core.getInput('github_token') || process.env.GITHUB_TOKEN;
     const roastLabel = core.getInput('roast_label') || 'roast-me';
     const enableModeration = core.getInput('enable_moderation') !== 'false';
     const skipDrafts = core.getInput('skip_drafts') === 'true';
-    if (!openaiApiKey) {
-        core.setFailed('openai_api_key input is required');
+    let providerInfo;
+    try {
+        providerInfo = resolveProvider();
+    }
+    catch (err) {
+        core.setFailed(err instanceof Error ? err.message : String(err));
         return;
+    }
+    const { provider, apiKey, baseURL, defaultModel } = providerInfo;
+    const model = core.getInput('model') || defaultModel;
+    if (enableModeration && provider !== 'openai') {
+        core.warning(`enable_moderation is only supported with the openai provider. Skipping moderation for provider "${provider}".`);
     }
     if (!githubToken) {
         core.setFailed('github_token is required (or GITHUB_TOKEN env var)');
@@ -35803,7 +35841,10 @@ async function run() {
         return;
     }
     const octokit = github.getOctokit(githubToken);
-    const client = new openai_1.default({ apiKey: openaiApiKey });
+    const clientOptions = { apiKey };
+    if (baseURL)
+        clientOptions.baseURL = baseURL;
+    const client = new openai_1.default(clientOptions);
     const { owner, repo } = ctx.repo;
     const prNumber = pr.number;
     const action = ctx.payload.action;
@@ -35864,7 +35905,7 @@ async function run() {
     const prompt = isMicDrop ? (0, lib_1.buildMicDropPrompt)(summary) : (0, lib_1.buildPrompt)(effectiveFormat, summary);
     core.info(`Calling ${model}...`);
     let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
-    if (enableModeration) {
+    if (enableModeration && provider === 'openai') {
         core.info('Running moderation check...');
         const flagged = await moderateText(client, finalText);
         if (flagged) {
@@ -35935,7 +35976,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.MIC_DROP_MAX_LINES = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = void 0;
+exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.MIC_DROP_MAX_LINES = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = exports.PROVIDER_CONFIGS = void 0;
 exports.parseFormat = parseFormat;
 exports.formatFilesList = formatFilesList;
 exports.truncatePatchLines = truncatePatchLines;
@@ -35951,6 +35992,16 @@ exports.buildCommentBody = buildCommentBody;
 const core = __importStar(__nccwpck_require__(7484));
 const crypto_1 = __nccwpck_require__(6982);
 const prompts_1 = __nccwpck_require__(6224);
+exports.PROVIDER_CONFIGS = {
+    openai: { defaultModel: 'gpt-4.1-mini' },
+    anthropic: { baseURL: 'https://api.anthropic.com/v1', defaultModel: 'claude-haiku-4-5-20251001' },
+    google: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', defaultModel: 'gemini-2.0-flash' },
+    openrouter: { baseURL: 'https://openrouter.ai/api/v1', defaultModel: 'openai/gpt-4.1-mini' },
+    huggingface: { baseURL: 'https://api-inference.huggingface.co/v1', defaultModel: 'Qwen/Qwen2.5-Coder-32B-Instruct' },
+    groq: { baseURL: 'https://api.groq.com/openai/v1', defaultModel: 'llama-3.3-70b-versatile' },
+    mistral: { baseURL: 'https://api.mistral.ai/v1', defaultModel: 'mistral-small-latest' },
+    together: { baseURL: 'https://api.together.xyz/v1', defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+};
 exports.MAX_PROMPT_DIFF_CHARS = 30000;
 exports.DEFAULT_TOP_FILES = 6;
 exports.DEFAULT_MAX_PATCH_LINES = 60;

@@ -4,6 +4,24 @@ import { TEMPLATES } from './prompts';
 
 export type Format = 'rap' | 'haiku' | 'roast';
 
+export type Provider = 'openai' | 'anthropic' | 'google' | 'openrouter' | 'huggingface' | 'groq' | 'mistral' | 'together';
+
+export interface ProviderConfig {
+  baseURL?: string;
+  defaultModel: string;
+}
+
+export const PROVIDER_CONFIGS: Record<Provider, ProviderConfig> = {
+  openai:      { defaultModel: 'gpt-4.1-mini' },
+  anthropic:   { baseURL: 'https://api.anthropic.com/v1',                              defaultModel: 'claude-haiku-4-5-20251001' },
+  google:      { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',   defaultModel: 'gemini-2.0-flash' },
+  openrouter:  { baseURL: 'https://openrouter.ai/api/v1',                              defaultModel: 'openai/gpt-4.1-mini' },
+  huggingface: { baseURL: 'https://api-inference.huggingface.co/v1',                   defaultModel: 'Qwen/Qwen2.5-Coder-32B-Instruct' },
+  groq:        { baseURL: 'https://api.groq.com/openai/v1',                            defaultModel: 'llama-3.3-70b-versatile' },
+  mistral:     { baseURL: 'https://api.mistral.ai/v1',                                 defaultModel: 'mistral-small-latest' },
+  together:    { baseURL: 'https://api.together.xyz/v1',                               defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+};
+
 export interface PRFile {
   filename: string;
   status: string;

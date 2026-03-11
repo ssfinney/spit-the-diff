@@ -13,9 +13,9 @@ inputs:
     default: 'rap'
 
   model:
-    description: 'OpenAI model to use for generation'
+    description: 'Model to use for generation. Must be valid for the chosen provider. Defaults vary by provider (e.g. gpt-4.1-mini for OpenAI, claude-haiku-4-5-20251001 for Anthropic).'
     required: false
-    default: 'gpt-4.1-mini'
+    default: ''
 
   max_files:
     description: 'Maximum number of changed files to include in the diff sent to the LLM'
@@ -28,7 +28,7 @@ inputs:
     default: 'roast-me'
 
   enable_moderation:
-    description: 'Run OpenAI moderation on generated output before posting. Set to true to enable.'
+    description: 'Run OpenAI moderation on generated output before posting. Set to true to enable. Only works with the openai provider; automatically skipped for all other providers.'
     required: false
     default: 'false'
 
@@ -58,8 +58,36 @@ inputs:
     default: '30000'
 
   openai_api_key:
-    description: 'OpenAI API key for LLM calls'
-    required: true
+    description: 'OpenAI API key. Provide exactly one of the provider API key inputs.'
+    required: false
+
+  anthropic_api_key:
+    description: 'Anthropic API key (for Claude models). Provide exactly one of the provider API key inputs.'
+    required: false
+
+  google_api_key:
+    description: 'Google API key (for Gemini models). Provide exactly one of the provider API key inputs.'
+    required: false
+
+  openrouter_api_key:
+    description: 'OpenRouter API key. Provide exactly one of the provider API key inputs.'
+    required: false
+
+  huggingface_api_key:
+    description: 'HuggingFace API key. Provide exactly one of the provider API key inputs.'
+    required: false
+
+  groq_api_key:
+    description: 'Groq API key. Provide exactly one of the provider API key inputs.'
+    required: false
+
+  mistral_api_key:
+    description: 'Mistral AI API key. Provide exactly one of the provider API key inputs.'
+    required: false
+
+  together_api_key:
+    description: 'Together AI API key. Provide exactly one of the provider API key inputs.'
+    required: false
 
   github_token:
     description: 'GitHub token used to post PR comments'

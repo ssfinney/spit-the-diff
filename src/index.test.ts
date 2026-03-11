@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Provider } from './lib';
 
 // Flush all microtasks + one macrotask so the fire-and-forget run() chain
 // triggered by module import has time to settle.
@@ -87,6 +88,40 @@ describe('run()', () => {
   beforeEach(() => {
     vi.resetModules();
     delete process.env.GITHUB_TOKEN;
+  });
+
+  it('calls setFailed when no API key is provided', async () => {
+    vi.doMock('@actions/core', () => makeCoreMock({ openai_api_key: '' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn(),
+      context: { payload: {}, repo: { owner: 'o', repo: 'r' } },
+    }));
+    vi.doMock('openai', () => ({ default: vi.fn() }));
+
+    await import('./index');
+    await flushRun();
+
+    const { setFailed } = await import('@actions/core');
+    expect(vi.mocked(setFailed)).toHaveBeenCalledWith(
+      expect.stringContaining('No API key provided'),
+    );
+  });
+
+  it('calls setFailed when multiple API keys are provided', async () => {
+    vi.doMock('@actions/core', () => makeCoreMock({ openai_api_key: 'sk-test', anthropic_api_key: 'ant-test' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn(),
+      context: { payload: {}, repo: { owner: 'o', repo: 'r' } },
+    }));
+    vi.doMock('openai', () => ({ default: vi.fn() }));
+
+    await import('./index');
+    await flushRun();
+
+    const { setFailed } = await import('@actions/core');
+    expect(vi.mocked(setFailed)).toHaveBeenCalledWith(
+      expect.stringContaining('Multiple API keys provided'),
+    );
   });
 
   it('calls setFailed when github_token is missing', async () => {
@@ -387,6 +422,66 @@ describe('run()', () => {
     );
   });
 
+  it('uses Anthropic provider and baseURL when anthropic_api_key is provided', async () => {
+    let capturedOptions: ConstructorParameters<typeof import('openai').default>[0] | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function MockOpenAI(this: any, options: ConstructorParameters<typeof import('openai').default>[0]) {
+      capturedOptions = options;
+      this.chat = { completions: { create: makeLLMCreate('anthropic bars') } };
+      this.moderations = { create: vi.fn() };
+    }
+
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const octokit = makeOctokit({ createComment: mockCreateComment });
+
+    vi.doMock('openai', () => ({ default: MockOpenAI }));
+    vi.doMock('@actions/core', () => makeCoreMock({ openai_api_key: '', anthropic_api_key: 'ant-key-123' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    expect(capturedOptions?.apiKey).toBe('ant-key-123');
+    expect(capturedOptions?.baseURL).toBe('https://api.anthropic.com/v1');
+    expect(mockCreateComment).toHaveBeenCalled();
+  });
+
+  it('skips moderation and logs a warning when provider is not openai', async () => {
+    const moderationsCreate = vi.fn();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function MockOpenAI(this: any) {
+      this.chat = { completions: { create: makeLLMCreate('groq bars') } };
+      this.moderations = { create: moderationsCreate };
+    }
+
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const octokit = makeOctokit({ createComment: mockCreateComment });
+
+    vi.doMock('openai', () => ({ default: MockOpenAI }));
+    vi.doMock('@actions/core', () => makeCoreMock({ openai_api_key: '', groq_api_key: 'groq-key', enable_moderation: 'true' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    expect(moderationsCreate).not.toHaveBeenCalled();
+    expect(mockCreateComment).toHaveBeenCalled();
+    const { warning } = await import('@actions/core');
+    expect(vi.mocked(warning)).toHaveBeenCalledWith(expect.stringContaining('enable_moderation'));
+  });
+
   it('calls setFailed with the error message when run() throws', async () => {
     const llmCreate = vi.fn().mockRejectedValue(new Error('API exploded'));
     const octokit = makeOctokit();
@@ -406,5 +501,57 @@ describe('run()', () => {
 
     const { setFailed } = await import('@actions/core');
     expect(vi.mocked(setFailed)).toHaveBeenCalledWith('API exploded');
+  });
+});
+
+// ─── resolveProvider() unit tests ────────────────────────────────────────────
+
+describe('resolveProvider()', () => {
+  // resolveProvider reads from @actions/core, which we swap per test.
+  // We reset modules so each test gets a fresh import.
+  beforeEach(() => vi.resetModules());
+  afterEach(() => vi.resetModules());
+
+  async function getResolveProvider(inputs: Record<string, string>) {
+    vi.doMock('@actions/core', () => ({
+      getInput: vi.fn((name: string) => inputs[name] ?? ''),
+      warning: vi.fn(),
+      info: vi.fn(),
+      setFailed: vi.fn(),
+      setOutput: vi.fn(),
+    }));
+    const { resolveProvider } = await import('./index');
+    return resolveProvider;
+  }
+
+  it.each([
+    ['openai',      'openai_api_key',      undefined,                                              'gpt-4.1-mini'],
+    ['anthropic',   'anthropic_api_key',   'https://api.anthropic.com/v1',                         'claude-haiku-4-5-20251001'],
+    ['google',      'google_api_key',      'https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-2.0-flash'],
+    ['openrouter',  'openrouter_api_key',  'https://openrouter.ai/api/v1',                         'openai/gpt-4.1-mini'],
+    ['huggingface', 'huggingface_api_key', 'https://api-inference.huggingface.co/v1',              'Qwen/Qwen2.5-Coder-32B-Instruct'],
+    ['groq',        'groq_api_key',        'https://api.groq.com/openai/v1',                       'llama-3.3-70b-versatile'],
+    ['mistral',     'mistral_api_key',     'https://api.mistral.ai/v1',                            'mistral-small-latest'],
+    ['together',    'together_api_key',    'https://api.together.xyz/v1',                          'meta-llama/Llama-3.3-70B-Instruct-Turbo'],
+  ] as Array<[Provider, string, string | undefined, string]>)(
+    'resolves provider "%s" from input "%s"',
+    async (provider, inputName, expectedBaseURL, expectedModel) => {
+      const resolve = await getResolveProvider({ [inputName]: 'test-key' });
+      const result = resolve();
+      expect(result.provider).toBe(provider);
+      expect(result.apiKey).toBe('test-key');
+      expect(result.baseURL).toBe(expectedBaseURL);
+      expect(result.defaultModel).toBe(expectedModel);
+    }
+  );
+
+  it('throws when no API key is provided', async () => {
+    const resolve = await getResolveProvider({});
+    expect(() => resolve()).toThrow('No API key provided');
+  });
+
+  it('throws when multiple API keys are provided', async () => {
+    const resolve = await getResolveProvider({ openai_api_key: 'sk-1', groq_api_key: 'gr-2' });
+    expect(() => resolve()).toThrow('Multiple API keys provided');
   });
 });
