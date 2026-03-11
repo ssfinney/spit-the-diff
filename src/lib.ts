@@ -59,7 +59,7 @@ export const COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\
 export const VALID_FORMATS: readonly Format[] = ['rap', 'haiku', 'roast'];
 
 export const COMMENT_HEADERS: Record<Format, string> = {
-  rap: '🎤 **Diff Cypher**',
+  rap: '🎤 **Diff Rap**',
   haiku: '🌸 **Diff Haiku**',
   roast: '🔥 **Code Roast**',
 };
