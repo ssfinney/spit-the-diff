@@ -6,6 +6,40 @@ A GitHub Action that turns pull request diffs into rap verses, haiku, or code ro
 
 ---
 
+## Quick Start
+
+Want to get this running in under 2 minutes?
+
+1. Create `.github/workflows/spit-the-diff.yml` in your repo:
+
+```yaml
+name: spit-the-diff
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+jobs:
+  rap-summary:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ssfinney/spit-the-diff@v1
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+```
+
+2. Add `OPENAI_API_KEY` as a repository secret.
+3. Open or update a PR — the bot posts and updates one persistent comment.
+
+That’s it. Customize format and other options in [Inputs](#inputs).
+
+---
+
 ## Example Output
 
 **Rap mode (default):**
