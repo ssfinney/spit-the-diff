@@ -146,6 +146,11 @@ async function generateWithHaikuRetry(
   let sanitized = sanitizeOutput(effectiveFormat, creative);
   let retries = 0;
 
+  if (effectiveFormat === 'haiku') {
+    const initialMeter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : (validateHaikuMeter(sanitized.text) ?? 'valid');
+    core.info(`Haiku attempt 1: ${initialMeter}`);
+  }
+
   // Retry 1 (of MAX_HAIKU_RETRIES): fix structural issues (wrong line count or empty).
   if (effectiveFormat === 'haiku' && (sanitized.needsHaikuRetry || !sanitized.text)) {
     retries++;
@@ -153,6 +158,8 @@ async function generateWithHaikuRetry(
     const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
     creative = await callLLM(client, model, retryPrompt);
     sanitized = sanitizeOutput(effectiveFormat, creative);
+    const meterAfter = sanitized.needsHaikuRetry ? 'still fewer than 3 lines' : (validateHaikuMeter(sanitized.text) ?? 'valid');
+    core.info(`Haiku retry ${retries} result: ${meterAfter}`);
   }
 
   // Retry 2 (of MAX_HAIKU_RETRIES): fix syllable counts if structure is now valid.
@@ -164,6 +171,17 @@ async function generateWithHaikuRetry(
       const meterPrompt = `${prompt}\n\nYour previous attempt had incorrect syllable counts: ${meterFeedback}. Rewrite with exact 5-7-5 syllables, counting each word carefully.`;
       creative = await callLLM(client, model, meterPrompt);
       sanitized = sanitizeOutput(effectiveFormat, creative);
+      const meterAfter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : (validateHaikuMeter(sanitized.text) ?? 'valid');
+      core.info(`Haiku retry ${retries} result: ${meterAfter}`);
+    }
+  }
+
+  if (effectiveFormat === 'haiku') {
+    const finalMeter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : validateHaikuMeter(sanitized.text);
+    if (finalMeter) {
+      core.warning(`Haiku published with meter violation after ${retries} retr${retries === 1 ? 'y' : 'ies'}: ${finalMeter}`);
+    } else {
+      core.info(`Haiku meter valid after ${retries} retr${retries === 1 ? 'y' : 'ies'}.`);
     }
   }
 
