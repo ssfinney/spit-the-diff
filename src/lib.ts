@@ -45,6 +45,14 @@ export interface ExistingBotComment {
 
 export const MAX_PROMPT_DIFF_CHARS = 30000;
 export const HAIKU_METER = [5, 7, 5] as const;
+
+/** How many syllables a human speaks when reading a file extension aloud. */
+export const EXTENSION_SYLLABLES: Record<string, number> = {
+  ts: 2, js: 2, rs: 2, cs: 2, rb: 2, md: 2, py: 1, go: 1,
+  tsx: 3, jsx: 3, css: 3, yml: 3, sql: 3,
+  yaml: 2, json: 2, html: 2, toml: 2, lock: 1, txt: 1,
+};
+
 export const DEFAULT_TOP_FILES = 6;
 export const DEFAULT_MAX_PATCH_LINES = 60;
 export const MIC_DROP_MAX_LINES = 2;
@@ -149,20 +157,28 @@ export function buildCompressedDiff(
   return fullPayload;
 }
 
-export function buildPrompt(format: Format, summary: PRSummary): string {
-  return TEMPLATES[format]
-    .replace(/\{title\}/g, summary.title)
-    .replace(/\{body\}/g, summary.body || '(none)')
-    .replace(/\{files\}/g, summary.filesText)
-    .replace(/\{diff\}/g, summary.diffPayload);
+export function buildPrompt(format: Format, summary: PRSummary): { system: string; user: string } {
+  const template = TEMPLATES[format];
+  return {
+    system: template.system,
+    user: template.user
+      .replace(/\{title\}/g, summary.title)
+      .replace(/\{body\}/g, summary.body || '(none)')
+      .replace(/\{files\}/g, summary.filesText)
+      .replace(/\{diff\}/g, summary.diffPayload),
+  };
 }
 
-export function buildMicDropPrompt(summary: PRSummary): string {
-  return TEMPLATES.mic_drop
-    .replace(/\{title\}/g, summary.title)
-    .replace(/\{body\}/g, summary.body || '(none)')
-    .replace(/\{files\}/g, summary.filesText)
-    .replace(/\{diff\}/g, summary.diffPayload);
+export function buildMicDropPrompt(summary: PRSummary): { system: string; user: string } {
+  const template = TEMPLATES.mic_drop;
+  return {
+    system: template.system,
+    user: template.user
+      .replace(/\{title\}/g, summary.title)
+      .replace(/\{body\}/g, summary.body || '(none)')
+      .replace(/\{files\}/g, summary.filesText)
+      .replace(/\{diff\}/g, summary.diffPayload),
+  };
 }
 
 export function countDiffLines(files: PRFile[]): number {
@@ -232,13 +248,26 @@ export function countLineSyllables(line: string): number {
   let total = 0;
   for (const token of tokens) {
     const clean = token.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
-    const parts = clean
-      .split(/[._]/)
+    const dotParts = clean.split(/\./);
+
+    // Check if the last dot-segment is a known file extension
+    let extensionSyllables = 0;
+    if (dotParts.length > 1) {
+      const ext = dotParts[dotParts.length - 1].toLowerCase();
+      if (ext in EXTENSION_SYLLABLES) {
+        extensionSyllables = EXTENSION_SYLLABLES[ext];
+        dotParts.pop(); // remove extension; count the rest normally
+      }
+    }
+
+    const parts = dotParts
+      .flatMap(p => p.split(/_/))
       .flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(' '))
       .filter(Boolean);
     for (const part of parts) {
       total += syllablesInWord(part);
     }
+    total += extensionSyllables;
   }
   return total;
 }
@@ -253,7 +282,7 @@ export function validateHaikuMeter(text: string): string | null {
   for (let i = 0; i < 3; i++) {
     const count = countLineSyllables(lines[i]);
     const expected = HAIKU_METER[i];
-    if (count !== expected) {
+    if (Math.abs(count - expected) > 1) {
       issues.push(`line ${i + 1} has ~${count} syllables (needs ${expected})`);
     }
   }

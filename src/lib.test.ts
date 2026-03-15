@@ -18,6 +18,7 @@ import {
   COMMENT_MARKER_REGEX,
   NOISE_FILE_PATTERNS,
   MIC_DROP_MAX_LINES,
+  EXTENSION_SYLLABLES,
   type PRFile,
   type PRSummary,
 } from './lib';
@@ -232,31 +233,31 @@ describe('buildPrompt', () => {
   const summary = makeSummary();
 
   it('substitutes {title}', () => {
-    expect(buildPrompt('rap', summary)).toContain(summary.title);
+    expect(buildPrompt('rap', summary).user).toContain(summary.title);
   });
 
   it('substitutes {body}', () => {
-    expect(buildPrompt('rap', summary)).toContain(summary.body);
+    expect(buildPrompt('rap', summary).user).toContain(summary.body);
   });
 
   it('substitutes {files}', () => {
-    expect(buildPrompt('rap', summary)).toContain(summary.filesText);
+    expect(buildPrompt('rap', summary).user).toContain(summary.filesText);
   });
 
   it('substitutes {diff}', () => {
-    expect(buildPrompt('rap', summary)).toContain(summary.diffPayload);
+    expect(buildPrompt('rap', summary).user).toContain(summary.diffPayload);
   });
 
   it('uses "(none)" when body is empty', () => {
-    expect(buildPrompt('rap', makeSummary({ body: '' }))).toContain('(none)');
+    expect(buildPrompt('rap', makeSummary({ body: '' })).user).toContain('(none)');
   });
 
   it('uses the haiku template for haiku format', () => {
-    expect(buildPrompt('haiku', summary)).toContain('5-7-5');
+    expect(buildPrompt('haiku', summary).system).toContain('5-7-5');
   });
 
   it('uses the roast template for roast format', () => {
-    expect(buildPrompt('roast', summary)).toContain('roast');
+    expect(buildPrompt('roast', summary).system).toContain('roast');
   });
 });
 
@@ -421,14 +422,23 @@ describe('countLineSyllables', () => {
   });
 
   it('decomposes snake_case filename syllables', () => {
-    // outlook(2) + triage(2) + py(1) = 5
+    // outlook(2) + triage(2) + py(1 from EXTENSION_SYLLABLES) = 5
     expect(countLineSyllables('outlook_triage.py')).toBe(5);
   });
 
   it('decomposes camelCase identifier syllables', () => {
-    // get(1) + User(2) + Data(2) = 5... actually get=1, User=2, Data=2 = 5
-    // camel: cam(1)+el(1)=2, Case: 1 = 3 total
+    // camel(2) + Case(1) = 3
     expect(countLineSyllables('camelCase')).toBe(3);
+  });
+
+  it('counts index.ts correctly using EXTENSION_SYLLABLES', () => {
+    // index(2) + ts(2 from EXTENSION_SYLLABLES) = 4
+    expect(countLineSyllables('index.ts')).toBe(4);
+  });
+
+  it('counts app.config.json correctly using EXTENSION_SYLLABLES', () => {
+    // app(1) + config(2) + json(2 from EXTENSION_SYLLABLES) = 5
+    expect(countLineSyllables('app.config.json')).toBe(5);
   });
 
   it('counts a line with a snake_case filename correctly', () => {
@@ -450,21 +460,27 @@ describe('validateHaikuMeter', () => {
     expect(validateHaikuMeter(haiku)).toBeNull();
   });
 
-  it('reports a short line', () => {
-    // "Filenames count true" = file(1)+names... let syllablesInWord handle it
-    // The point is it's fewer than 5
-    const haiku = 'Silent except blocks\nbytes cascade like autumn leaves\nFilenames count true';
+  it('returns null for a 5-7-4 haiku (within ±1 tolerance)', () => {
+    // Line 3: "ships now" = 2 syllables... need something that is exactly 4
+    // "merge it now" = merge(1)+it(1)+now(1) = 3... "merge the code now" = merge(1)+the(1)+code(1)+now(1) = 4
+    const haiku = 'Silent except blocks\nbytes cascade like autumn leaves\nmerge the code now';
+    expect(validateHaikuMeter(haiku)).toBeNull();
+  });
+
+  it('reports line 3 for a 5-7-3 haiku (outside ±1 tolerance)', () => {
+    // "ships now" = ships(1)+now(1) = 2 syllables; |2-5|=3 > 1
+    const haiku = 'Silent except blocks\nbytes cascade like autumn leaves\nships now';
     const result = validateHaikuMeter(haiku);
     expect(result).not.toBeNull();
     expect(result).toMatch(/line 3/);
   });
 
   it('reports an over-count on line 2', () => {
-    // 8-syllable line 2
-    const haiku = 'Silent except blocks\nnow log in outlook_triage.py\nregex flagged no more';
+    // 9-syllable line 2: now(1)+log(1)+in(1)+the(1)+outlook_triage.py(5) = 9; |9-7|=2 > 1
+    const haiku = 'Silent except blocks\nnow log in the outlook_triage.py\nregex flagged no more';
     const result = validateHaikuMeter(haiku);
     expect(result).not.toBeNull();
-    expect(result).toMatch(/line 2.*8/);
+    expect(result).toMatch(/line 2.*9/);
   });
 
   it('returns null when text does not have 3 lines', () => {
@@ -476,6 +492,26 @@ describe('validateHaikuMeter', () => {
     const result = validateHaikuMeter(haiku);
     expect(result).toMatch(/line 1/);
     expect(result).toMatch(/line 3/);
+  });
+});
+
+// ─── EXTENSION_SYLLABLES ─────────────────────────────────────────────────────
+
+describe('EXTENSION_SYLLABLES', () => {
+  it('counts ts as 2 syllables', () => {
+    expect(EXTENSION_SYLLABLES['ts']).toBe(2);
+  });
+
+  it('counts py as 1 syllable', () => {
+    expect(EXTENSION_SYLLABLES['py']).toBe(1);
+  });
+
+  it('counts json as 2 syllables', () => {
+    expect(EXTENSION_SYLLABLES['json']).toBe(2);
+  });
+
+  it('counts tsx as 3 syllables', () => {
+    expect(EXTENSION_SYLLABLES['tsx']).toBe(3);
   });
 });
 
@@ -608,20 +644,20 @@ describe('buildMicDropPrompt', () => {
 
   it('substitutes all placeholders', () => {
     const prompt = buildMicDropPrompt(summary);
-    expect(prompt).toContain('Fix the thing');
-    expect(prompt).toContain('Fixes a bug');
-    expect(prompt).toContain('src/index.ts | modified | +1/-0');
-    expect(prompt).toContain('+ fixed it');
+    expect(prompt.user).toContain('Fix the thing');
+    expect(prompt.user).toContain('Fixes a bug');
+    expect(prompt.user).toContain('src/index.ts | modified | +1/-0');
+    expect(prompt.user).toContain('+ fixed it');
   });
 
   it('uses "(none)" when body is empty', () => {
     const prompt = buildMicDropPrompt({ ...summary, body: '' });
-    expect(prompt).toContain('(none)');
+    expect(prompt.user).toContain('(none)');
   });
 
   it('mentions "2 lines" in the prompt text', () => {
     const prompt = buildMicDropPrompt(summary);
-    expect(prompt).toContain('2 line');
+    expect(prompt.system).toContain('2 line');
   });
 });
 
