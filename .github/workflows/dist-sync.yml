@@ -3,23 +3,22 @@ name: Dist Sync
 on:
   push:
     branches:
-      - '**'
+      - main
   workflow_dispatch:
 
 jobs:
   sync-dist:
     name: Rebuild dist when stale
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '20'
           cache: 'npm'
@@ -43,5 +42,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add dist/
+          # Skip CI to avoid rerunning workflows on the generated dist-only follow-up commit.
           git commit -m "Auto-build dist [skip ci]"
           git push
