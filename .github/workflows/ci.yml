@@ -23,6 +23,32 @@ jobs:
 
       - run: npm test
 
+  build:
+    name: Dist up to date
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Fail if dist is stale
+        run: |
+          if ! git diff --quiet dist/; then
+            echo "dist/ is out of date. Run 'npm run build' and commit the result."
+            git diff --stat dist/
+            exit 1
+          fi
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
