@@ -29,7 +29,7 @@ import {
 
 // Maximum number of retries for haiku generation (initial call + MAX_HAIKU_RETRIES).
 const MAX_HAIKU_RETRIES = 2;
-const MAX_SPECIFICITY_RETRIES = 1;
+
 
 const PROVIDER_KEY_INPUTS: Record<Provider, string> = {
   openai:      'openai_api_key',
