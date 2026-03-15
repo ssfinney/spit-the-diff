@@ -35685,6 +35685,8 @@ const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const openai_1 = __importDefault(__nccwpck_require__(2583));
 const lib_1 = __nccwpck_require__(5704);
+// Maximum number of retries for haiku generation (initial call + MAX_HAIKU_RETRIES).
+const MAX_HAIKU_RETRIES = 2;
 const PROVIDER_KEY_INPUTS = {
     openai: 'openai_api_key',
     anthropic: 'anthropic_api_key',
@@ -35765,26 +35767,56 @@ async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = lib_1.DEFA
     };
 }
 async function generateWithHaikuRetry(client, model, prompt, effectiveFormat) {
-    let creative = await callLLM(client, model, prompt);
+    let creative = await callLLM(client, model, prompt.user, prompt.system);
     let sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
-    if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
-        core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
-        const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
-        creative = await callLLM(client, model, retryPrompt);
-        sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+    let retries = 0;
+    if (effectiveFormat === 'haiku') {
+        const initialMeter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : ((0, lib_1.validateHaikuMeter)(sanitized.text) ?? 'valid');
+        core.info(`Haiku attempt 1: ${initialMeter}`);
     }
-    else if (!sanitized.text) {
-        core.info('Sanitized output was empty. Retrying once.');
-        const emptyRetryPrompt = `${prompt}\n\nReminder: Output only the creative content, no title or explanation.`;
-        creative = await callLLM(client, model, emptyRetryPrompt);
+    // Retry 1 (of MAX_HAIKU_RETRIES): fix structural issues (wrong line count or empty).
+    if (effectiveFormat === 'haiku' && (sanitized.needsHaikuRetry || !sanitized.text)) {
+        retries++;
+        core.info(`Haiku retry ${retries}/${MAX_HAIKU_RETRIES}: fewer than 3 lines or empty output.`);
+        const retryUser = `${prompt.user}${creative ? `\n\nYour previous output:\n${creative}` : ''}\n\nReminder: Output exactly 3 lines. No preface.`;
+        creative = await callLLM(client, model, retryUser, prompt.system);
         sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+        const meterAfter = sanitized.needsHaikuRetry ? 'still fewer than 3 lines' : ((0, lib_1.validateHaikuMeter)(sanitized.text) ?? 'valid');
+        core.info(`Haiku retry ${retries} result: ${meterAfter}`);
+    }
+    // Retry 2 (of MAX_HAIKU_RETRIES): fix syllable counts if structure is now valid.
+    if (effectiveFormat === 'haiku' && retries < MAX_HAIKU_RETRIES && !sanitized.needsHaikuRetry) {
+        const meterFeedback = (0, lib_1.validateHaikuMeter)(sanitized.text);
+        if (meterFeedback) {
+            retries++;
+            core.info(`Haiku retry ${retries}/${MAX_HAIKU_RETRIES}: meter off — ${meterFeedback}`);
+            const meterUser = `${prompt.user}\n\nYour previous haiku:\n${sanitized.text}\n\nThis had incorrect syllable counts: ${meterFeedback}. Revise it to hit 5-7-5 while keeping it natural and meaningful. Prefer common English words over spelled-out abbreviations or padding.`;
+            creative = await callLLM(client, model, meterUser, prompt.system);
+            sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+            const meterAfter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : ((0, lib_1.validateHaikuMeter)(sanitized.text) ?? 'valid');
+            core.info(`Haiku retry ${retries} result: ${meterAfter}`);
+        }
+    }
+    if (effectiveFormat === 'haiku') {
+        const finalMeter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : (0, lib_1.validateHaikuMeter)(sanitized.text);
+        if (finalMeter) {
+            core.warning(`Haiku published with meter violation after ${retries} retr${retries === 1 ? 'y' : 'ies'}: ${finalMeter}`);
+        }
+        else {
+            core.info(`Haiku meter valid after ${retries} retr${retries === 1 ? 'y' : 'ies'}.`);
+        }
     }
     return sanitized.text;
 }
-async function callLLM(client, model, prompt) {
+async function callLLM(client, model, prompt, systemPrompt) {
+    const messages = [];
+    if (systemPrompt) {
+        messages.push({ role: 'system', content: systemPrompt });
+    }
+    messages.push({ role: 'user', content: prompt });
     const response = await client.chat.completions.create({
         model,
-        messages: [{ role: 'user', content: prompt }],
+        messages,
     });
     const choice = response.choices[0];
     core.info(`LLM finish_reason: ${choice?.finish_reason ?? 'unknown'}`);
@@ -35910,7 +35942,7 @@ async function run() {
         const flagged = await moderateText(client, finalText);
         if (flagged) {
             core.warning('First attempt flagged by moderation. Retrying...');
-            const safeRetryPrompt = `${prompt}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.`;
+            const safeRetryPrompt = { system: prompt.system, user: `${prompt.user}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.` };
             const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
             const flaggedAgain = await moderateText(client, retryText);
             if (flaggedAgain) {
@@ -35976,7 +36008,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.MIC_DROP_MAX_LINES = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = exports.PROVIDER_CONFIGS = void 0;
+exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.MIC_DROP_MAX_LINES = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.EXTENSION_SYLLABLES = exports.HAIKU_METER = exports.MAX_PROMPT_DIFF_CHARS = exports.PROVIDER_CONFIGS = void 0;
 exports.parseFormat = parseFormat;
 exports.formatFilesList = formatFilesList;
 exports.truncatePatchLines = truncatePatchLines;
@@ -35986,6 +36018,8 @@ exports.buildMicDropPrompt = buildMicDropPrompt;
 exports.countDiffLines = countDiffLines;
 exports.removeLeadingMetaLine = removeLeadingMetaLine;
 exports.normalizeUnicode = normalizeUnicode;
+exports.countLineSyllables = countLineSyllables;
+exports.validateHaikuMeter = validateHaikuMeter;
 exports.sanitizeOutput = sanitizeOutput;
 exports.buildInputHash = buildInputHash;
 exports.buildCommentBody = buildCommentBody;
@@ -36003,6 +36037,13 @@ exports.PROVIDER_CONFIGS = {
     together: { baseURL: 'https://api.together.xyz/v1', defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
 };
 exports.MAX_PROMPT_DIFF_CHARS = 30000;
+exports.HAIKU_METER = [5, 7, 5];
+/** How many syllables a human speaks when reading a file extension aloud. */
+exports.EXTENSION_SYLLABLES = {
+    ts: 2, js: 2, rs: 2, cs: 2, rb: 2, md: 2, py: 1, go: 1,
+    tsx: 3, jsx: 3, css: 3, yml: 3, sql: 3,
+    yaml: 2, json: 2, html: 2, toml: 2, lock: 1, txt: 1,
+};
 exports.DEFAULT_TOP_FILES = 6;
 exports.DEFAULT_MAX_PATCH_LINES = 60;
 exports.MIC_DROP_MAX_LINES = 2;
@@ -36015,7 +36056,7 @@ exports.COMMENT_MARKER_KEY = 'spit-the-diff';
 exports.COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\s*-->/i;
 exports.VALID_FORMATS = ['rap', 'haiku', 'roast'];
 exports.COMMENT_HEADERS = {
-    rap: '🎤 **Diff Cypher**',
+    rap: '🎤 **Diff Rap**',
     haiku: '🌸 **Diff Haiku**',
     roast: '🔥 **Code Roast**',
 };
@@ -36081,18 +36122,26 @@ function buildCompressedDiff(files, topN = exports.DEFAULT_TOP_FILES, maxPatchLi
     return fullPayload;
 }
 function buildPrompt(format, summary) {
-    return prompts_1.TEMPLATES[format]
-        .replace(/\{title\}/g, summary.title)
-        .replace(/\{body\}/g, summary.body || '(none)')
-        .replace(/\{files\}/g, summary.filesText)
-        .replace(/\{diff\}/g, summary.diffPayload);
+    const template = prompts_1.TEMPLATES[format];
+    return {
+        system: template.system,
+        user: template.user
+            .replace(/\{title\}/g, summary.title)
+            .replace(/\{body\}/g, summary.body || '(none)')
+            .replace(/\{files\}/g, summary.filesText)
+            .replace(/\{diff\}/g, summary.diffPayload),
+    };
 }
 function buildMicDropPrompt(summary) {
-    return prompts_1.TEMPLATES.mic_drop
-        .replace(/\{title\}/g, summary.title)
-        .replace(/\{body\}/g, summary.body || '(none)')
-        .replace(/\{files\}/g, summary.filesText)
-        .replace(/\{diff\}/g, summary.diffPayload);
+    const template = prompts_1.TEMPLATES.mic_drop;
+    return {
+        system: template.system,
+        user: template.user
+            .replace(/\{title\}/g, summary.title)
+            .replace(/\{body\}/g, summary.body || '(none)')
+            .replace(/\{files\}/g, summary.filesText)
+            .replace(/\{diff\}/g, summary.diffPayload),
+    };
 }
 function countDiffLines(files) {
     return files
@@ -36124,6 +36173,71 @@ function normalizeUnicode(text) {
     // letters like curly apostrophe U+02BC), General Punctuation (U+2000-U+206F),
     // Miscellaneous Symbols, and emoji.
     return text.replace(/[^\u0000-\u04FF\u2000-\u206F\u2600-\u27BF\uFE00-\uFEFF\u{1F000}-\u{1FFFF}]+/gu, '—');
+}
+// Counts the syllables in a single plain-English word using a heuristic:
+// strips silent-e endings, common -ed/-es suffixes, then counts vowel groups.
+// "i" or "u" before another vowel is split to handle words like "triage" (2 syl).
+// Accurate enough to catch clear haiku meter violations; not a dictionary lookup.
+function syllablesInWord(word) {
+    const w = word.toLowerCase().replace(/[^a-z]/g, '');
+    if (!w)
+        return 0;
+    if (w.length <= 3)
+        return 1;
+    let s = w
+        .replace(/[^laeiouy]es$/, '') // -nes/-tes/-mes/-ces etc: 'names' → 'na'
+        .replace(/[^dt]ed$/, '') // -ed suffix (not -ted/-ded): 'flagged' → 'flagg'
+        .replace(/[^aeiouy]e$/, ''); // silent final e: 'case' → 'cas', 'file' → 'fi'
+    if (!s)
+        s = w;
+    // Split 'i'/'u' before another vowel so 'triage' → 'tri ag' (2 groups not 1)
+    const normalized = s.replace(/([iu])([aeiouy])/g, '$1 $2');
+    const groups = normalized.match(/[aeiouy]{1,2}/g) ?? [];
+    return Math.max(1, groups.length);
+}
+// Counts syllables in one line of a haiku, decomposing snake_case, camelCase,
+// and file extensions before counting (e.g. outlook_triage.py → 2+2+1 = 5).
+function countLineSyllables(line) {
+    const tokens = line.replace(/[—–]/g, ' ').split(/\s+/).filter(Boolean);
+    let total = 0;
+    for (const token of tokens) {
+        const clean = token.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
+        const dotParts = clean.split(/\./);
+        // Check if the last dot-segment is a known file extension
+        let extensionSyllables = 0;
+        if (dotParts.length > 1) {
+            const ext = dotParts[dotParts.length - 1].toLowerCase();
+            if (ext in exports.EXTENSION_SYLLABLES) {
+                extensionSyllables = exports.EXTENSION_SYLLABLES[ext];
+                dotParts.pop(); // remove extension; count the rest normally
+            }
+        }
+        const parts = dotParts
+            .flatMap(p => p.split(/_/))
+            .flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(' '))
+            .filter(Boolean);
+        for (const part of parts) {
+            total += syllablesInWord(part);
+        }
+        total += extensionSyllables;
+    }
+    return total;
+}
+// Returns a human-readable description of meter violations, or null if valid.
+// Used to build the retry prompt so the model knows exactly what to fix.
+function validateHaikuMeter(text) {
+    const lines = text.split('\n');
+    if (lines.length !== 3)
+        return null; // structural issues handled elsewhere
+    const issues = [];
+    for (let i = 0; i < 3; i++) {
+        const count = countLineSyllables(lines[i]);
+        const expected = exports.HAIKU_METER[i];
+        if (Math.abs(count - expected) > 1) {
+            issues.push(`line ${i + 1} has ~${count} syllables (needs ${expected})`);
+        }
+    }
+    return issues.length > 0 ? issues.join('; ') : null;
 }
 function sanitizeOutput(format, rawText) {
     const cleanedLines = normalizeUnicode(rawText)
@@ -36181,7 +36295,8 @@ Files changed: {files}
 Diff excerpt:
 {diff}`;
 exports.TEMPLATES = {
-    rap: `You are a razor-sharp hip-hop lyricist with a developer's vocabulary and a flair for technical comedy. Write a short rap verse summarizing this GitHub pull request.
+    rap: {
+        system: `You are a razor-sharp hip-hop lyricist with a developer's vocabulary and a flair for technical comedy. Write a short rap verse summarizing this GitHub pull request.
 
 Requirements:
 - Maximum 8 lines
@@ -36196,22 +36311,23 @@ Example of the style — rhythm and specificity, not content (write something or
 Two functions merged, the helper's gone for good,
 the loop runs tighter than we thought it would,
 a config flag replaced a hardcoded string,
-now staging matches prod in everything.
-
-${PROMPT_FOOTER}`,
-    haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
+now staging matches prod in everything.`,
+        user: PROMPT_FOOTER,
+    },
+    haiku: {
+        system: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
 
 Rules:
-- Exactly 3 lines
-- Approximate 5-7-5 syllable structure
-- Focus on the main code change
-- Mention a file, function, or module if relevant
-- No title or explanation
-- Output only the 3 lines
-- Do NOT write a label, preamble, or any text before or after the 3 lines
-
-${PROMPT_FOOTER}`,
-    roast: `You are a battle-rap comedian with a CS degree. Write a withering, funny roast of the code changes in this GitHub pull request.
+- Exactly 3 lines in strict 5-7-5 syllable structure
+- Capture the *essence* of the change — what it does, why it matters, or how it feels — not a literal reading of filenames
+- You may reference a file, module, or function by a short natural name (e.g. "the config", "auth logic", "the tests") but do NOT spell out file extensions as words (no "tee-ess", "jay-ess", etc.)
+- If you use a technical term, count its syllables as naturally spoken English
+- Before finalizing, count each line's syllables explicitly. Short lines of simple monosyllabic words are the most common under-count trap
+- No title, label, preamble, or explanation — output only the 3 lines`,
+        user: PROMPT_FOOTER,
+    },
+    roast: {
+        system: `You are a battle-rap comedian with a CS degree. Write a withering, funny roast of the code changes in this GitHub pull request.
 
 Rules:
 - Roast the code patterns, architecture choices, or complexity — NOT the developer
@@ -36220,20 +36336,22 @@ Rules:
 - Mention specific files, functions, or modules — generic roasts are weak roasts
 - No profanity
 - No harassment or personal attacks
+- No personal attacks
 - Do not use bullet points or numbering
-- Output only the roast, no title or explanation
-
-${PROMPT_FOOTER}`,
-    mic_drop: `You are a hip-hop lyricist. This is a small pull request — give it a tight 2-line mic drop.
+- Output only the roast, no title or explanation`,
+        user: PROMPT_FOOTER,
+    },
+    mic_drop: {
+        system: `You are a hip-hop lyricist. This is a small pull request — give it a tight 2-line mic drop.
 
 Rules:
 - Exactly 2 lines
 - The lines must rhyme with each other
 - Name the specific file, function, or change — technical wordplay preferred over generic rhymes
 - Punchy and funny — snap finish, leave them wanting the full verse
-- No title, label, or explanation — output only the 2 lines
-
-${PROMPT_FOOTER}`,
+- No title, label, or explanation — output only the 2 lines`,
+        user: PROMPT_FOOTER,
+    },
 };
 
 

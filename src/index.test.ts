@@ -390,6 +390,14 @@ describe('run()', () => {
     expect(body).toContain('code lands on the branch');
     expect(body).toContain('lines shift and the diff grows small');
     expect(body).toContain('haiku endures all');
+
+    // Verify the LLM call included a system message (haiku uses system/user split)
+    const callArgs = llmCreate.mock.calls[0][0];
+    expect(callArgs.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: 'system' }),
+      ])
+    );
   });
 
   it.each([

@@ -139,20 +139,27 @@ async function fetchPRData(
 async function generateWithHaikuRetry(
   client: OpenAI,
   model: string,
-  prompt: string,
+  prompt: { system: string; user: string },
   effectiveFormat: Format
 ): Promise<string> {
-  let creative = await callLLM(client, model, prompt);
+  let creative = await callLLM(client, model, prompt.user, prompt.system);
   let sanitized = sanitizeOutput(effectiveFormat, creative);
   let retries = 0;
+
+  if (effectiveFormat === 'haiku') {
+    const initialMeter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : (validateHaikuMeter(sanitized.text) ?? 'valid');
+    core.info(`Haiku attempt 1: ${initialMeter}`);
+  }
 
   // Retry 1 (of MAX_HAIKU_RETRIES): fix structural issues (wrong line count or empty).
   if (effectiveFormat === 'haiku' && (sanitized.needsHaikuRetry || !sanitized.text)) {
     retries++;
     core.info(`Haiku retry ${retries}/${MAX_HAIKU_RETRIES}: fewer than 3 lines or empty output.`);
-    const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
-    creative = await callLLM(client, model, retryPrompt);
+    const retryUser = `${prompt.user}${creative ? `\n\nYour previous output:\n${creative}` : ''}\n\nReminder: Output exactly 3 lines. No preface.`;
+    creative = await callLLM(client, model, retryUser, prompt.system);
     sanitized = sanitizeOutput(effectiveFormat, creative);
+    const meterAfter = sanitized.needsHaikuRetry ? 'still fewer than 3 lines' : (validateHaikuMeter(sanitized.text) ?? 'valid');
+    core.info(`Haiku retry ${retries} result: ${meterAfter}`);
   }
 
   // Retry 2 (of MAX_HAIKU_RETRIES): fix syllable counts if structure is now valid.
@@ -161,19 +168,36 @@ async function generateWithHaikuRetry(
     if (meterFeedback) {
       retries++;
       core.info(`Haiku retry ${retries}/${MAX_HAIKU_RETRIES}: meter off — ${meterFeedback}`);
-      const meterPrompt = `${prompt}\n\nYour previous attempt had incorrect syllable counts: ${meterFeedback}. Rewrite with exact 5-7-5 syllables, counting each word carefully.`;
-      creative = await callLLM(client, model, meterPrompt);
+      const meterUser = `${prompt.user}\n\nYour previous haiku:\n${sanitized.text}\n\nThis had incorrect syllable counts: ${meterFeedback}. Revise it to hit 5-7-5 while keeping it natural and meaningful. Prefer common English words over spelled-out abbreviations or padding.`;
+      creative = await callLLM(client, model, meterUser, prompt.system);
       sanitized = sanitizeOutput(effectiveFormat, creative);
+      const meterAfter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : (validateHaikuMeter(sanitized.text) ?? 'valid');
+      core.info(`Haiku retry ${retries} result: ${meterAfter}`);
+    }
+  }
+
+  if (effectiveFormat === 'haiku') {
+    const finalMeter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : validateHaikuMeter(sanitized.text);
+    if (finalMeter) {
+      core.warning(`Haiku published with meter violation after ${retries} retr${retries === 1 ? 'y' : 'ies'}: ${finalMeter}`);
+    } else {
+      core.info(`Haiku meter valid after ${retries} retr${retries === 1 ? 'y' : 'ies'}.`);
     }
   }
 
   return sanitized.text;
 }
 
-async function callLLM(client: OpenAI, model: string, prompt: string): Promise<string> {
+async function callLLM(client: OpenAI, model: string, prompt: string, systemPrompt?: string): Promise<string> {
+  const messages: OpenAI.ChatCompletionMessageParam[] = [];
+  if (systemPrompt) {
+    messages.push({ role: 'system', content: systemPrompt });
+  }
+  messages.push({ role: 'user', content: prompt });
+
   const response = await client.chat.completions.create({
     model,
-    messages: [{ role: 'user', content: prompt }],
+    messages,
   });
 
   const choice = response.choices[0];
@@ -331,7 +355,7 @@ async function run(): Promise<void> {
     const flagged = await moderateText(client, finalText);
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
-      const safeRetryPrompt = `${prompt}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.`;
+      const safeRetryPrompt = { system: prompt.system, user: `${prompt.user}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.` };
       const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
       const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {

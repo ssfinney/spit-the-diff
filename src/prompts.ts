@@ -11,7 +11,8 @@ Diff excerpt:
 {diff}`;
 
 export const TEMPLATES = {
-  rap: `You are a razor-sharp hip-hop lyricist with a developer's vocabulary and a flair for technical comedy. Write a short rap verse summarizing this GitHub pull request.
+  rap: {
+    system: `You are a razor-sharp hip-hop lyricist with a developer's vocabulary and a flair for technical comedy. Write a short rap verse summarizing this GitHub pull request.
 
 Requirements:
 - Maximum 8 lines
@@ -26,31 +27,25 @@ Example of the style — rhythm and specificity, not content (write something or
 Two functions merged, the helper's gone for good,
 the loop runs tighter than we thought it would,
 a config flag replaced a hardcoded string,
-now staging matches prod in everything.
+now staging matches prod in everything.`,
+    user: PROMPT_FOOTER,
+  },
 
-${PROMPT_FOOTER}`,
-
-  haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
+  haiku: {
+    system: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
 
 Rules:
 - Exactly 3 lines in strict 5-7-5 syllable structure
-- Count syllables carefully: for identifiers and filenames, decompose first —
-  split snake_case on underscores, camelCase on capital letters, and pronounce
-  extensions as spoken (\`.py\` = "pie" = 1 syl, \`.ts\` = "tee-ess" = 2 syl,
-  \`.js\` = "jay-ess" = 2 syl). Example: \`outlook_triage.py\` = out·look (2) +
-  tri·age (2) + py (1) = 5 syllables total.
-- Before writing, mentally verify the syllable count of each line — short lines
-  with simple words are the most common under-count trap; count every syllable
-  explicitly rather than trusting intuition on lines that "feel" complete
-- Focus on the main code change
-- Mention a file, function, or module if relevant
-- No title or explanation
-- Output only the 3 lines
-- Do NOT write a label, preamble, or any text before or after the 3 lines
+- Capture the *essence* of the change — what it does, why it matters, or how it feels — not a literal reading of filenames
+- You may reference a file, module, or function by a short natural name (e.g. "the config", "auth logic", "the tests") but do NOT spell out file extensions as words (no "tee-ess", "jay-ess", etc.)
+- If you use a technical term, count its syllables as naturally spoken English
+- Before finalizing, count each line's syllables explicitly. Short lines of simple monosyllabic words are the most common under-count trap
+- No title, label, preamble, or explanation — output only the 3 lines`,
+    user: PROMPT_FOOTER,
+  },
 
-${PROMPT_FOOTER}`,
-
-  roast: `You are a battle-rap comedian with a CS degree. Write a withering, funny roast of the code changes in this GitHub pull request.
+  roast: {
+    system: `You are a battle-rap comedian with a CS degree. Write a withering, funny roast of the code changes in this GitHub pull request.
 
 Rules:
 - Roast the code patterns, architecture choices, or complexity — NOT the developer
@@ -59,19 +54,21 @@ Rules:
 - Mention specific files, functions, or modules — generic roasts are weak roasts
 - No profanity
 - No harassment or personal attacks
+- No personal attacks
 - Do not use bullet points or numbering
-- Output only the roast, no title or explanation
+- Output only the roast, no title or explanation`,
+    user: PROMPT_FOOTER,
+  },
 
-${PROMPT_FOOTER}`,
-
-  mic_drop: `You are a hip-hop lyricist. This is a small pull request — give it a tight 2-line mic drop.
+  mic_drop: {
+    system: `You are a hip-hop lyricist. This is a small pull request — give it a tight 2-line mic drop.
 
 Rules:
 - Exactly 2 lines
 - The lines must rhyme with each other
 - Name the specific file, function, or change — technical wordplay preferred over generic rhymes
 - Punchy and funny — snap finish, leave them wanting the full verse
-- No title, label, or explanation — output only the 2 lines
-
-${PROMPT_FOOTER}`,
-} satisfies Record<string, string>;
+- No title, label, or explanation — output only the 2 lines`,
+    user: PROMPT_FOOTER,
+  },
+} satisfies Record<string, { system: string; user: string }>;
