@@ -1,6 +1,6 @@
 {
   "name": "spit-the-diff",
-  "version": "1.0.0",
+  "version": "1.1.2",
   "description": "Where your diffs drop bars. A GitHub Action that generates creative PR summaries using AI.",
   "main": "dist/index.js",
   "scripts": {
