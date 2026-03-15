@@ -12,6 +12,8 @@ import {
   sanitizeOutput,
   buildInputHash,
   buildCommentBody,
+  countLineSyllables,
+  validateHaikuMeter,
   MODERATION_FALLBACK,
   COMMENT_MARKER_REGEX,
   NOISE_FILE_PATTERNS,
@@ -400,6 +402,80 @@ describe('sanitizeOutput', () => {
     const raw = 'line one\n\n\nline two';
     const { text } = sanitizeOutput('rap', raw);
     expect(text.split('\n').every(l => l.length > 0)).toBe(true);
+  });
+});
+
+// ─── countLineSyllables ───────────────────────────────────────────────────────
+
+describe('countLineSyllables', () => {
+  it('counts a clean 5-syllable line', () => {
+    expect(countLineSyllables('Silent except blocks')).toBe(5);
+  });
+
+  it('counts a clean 7-syllable line', () => {
+    expect(countLineSyllables('bytes cascade like autumn leaves')).toBe(7);
+  });
+
+  it('counts a clean 5-syllable closing line', () => {
+    expect(countLineSyllables('ship it anyway')).toBe(5);
+  });
+
+  it('decomposes snake_case filename syllables', () => {
+    // outlook(2) + triage(2) + py(1) = 5
+    expect(countLineSyllables('outlook_triage.py')).toBe(5);
+  });
+
+  it('decomposes camelCase identifier syllables', () => {
+    // get(1) + User(2) + Data(2) = 5... actually get=1, User=2, Data=2 = 5
+    // camel: cam(1)+el(1)=2, Case: 1 = 3 total
+    expect(countLineSyllables('camelCase')).toBe(3);
+  });
+
+  it('counts a line with a snake_case filename correctly', () => {
+    // now(1) log(1) in(1) outlook_triage.py(5) = 8
+    expect(countLineSyllables('now log in outlook_triage.py')).toBe(8);
+  });
+
+  it('handles em-dash as whitespace', () => {
+    // "regex flagged no more" = re(1)+gex(1) flag(1)+ged(1-ed=1) no(1) more(1) = 5
+    expect(countLineSyllables('regex flagged no more')).toBe(5);
+  });
+});
+
+// ─── validateHaikuMeter ───────────────────────────────────────────────────────
+
+describe('validateHaikuMeter', () => {
+  it('returns null for a valid 5-7-5 haiku', () => {
+    const haiku = 'Silent except blocks\nbytes cascade like autumn leaves\nship it anyway';
+    expect(validateHaikuMeter(haiku)).toBeNull();
+  });
+
+  it('reports a short line', () => {
+    // "Filenames count true" = file(1)+names... let syllablesInWord handle it
+    // The point is it's fewer than 5
+    const haiku = 'Silent except blocks\nbytes cascade like autumn leaves\nFilenames count true';
+    const result = validateHaikuMeter(haiku);
+    expect(result).not.toBeNull();
+    expect(result).toMatch(/line 3/);
+  });
+
+  it('reports an over-count on line 2', () => {
+    // 8-syllable line 2
+    const haiku = 'Silent except blocks\nnow log in outlook_triage.py\nregex flagged no more';
+    const result = validateHaikuMeter(haiku);
+    expect(result).not.toBeNull();
+    expect(result).toMatch(/line 2.*8/);
+  });
+
+  it('returns null when text does not have 3 lines', () => {
+    expect(validateHaikuMeter('only one line')).toBeNull();
+  });
+
+  it('reports multiple violations', () => {
+    const haiku = 'too short\nbytes cascade like autumn leaves\nalso short';
+    const result = validateHaikuMeter(haiku);
+    expect(result).toMatch(/line 1/);
+    expect(result).toMatch(/line 3/);
   });
 });
 

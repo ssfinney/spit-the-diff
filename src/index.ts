@@ -22,7 +22,11 @@ import {
   formatFilesList,
   buildCompressedDiff,
   countDiffLines,
+  validateHaikuMeter,
 } from './lib';
+
+// Maximum number of retries for haiku generation (initial call + MAX_HAIKU_RETRIES).
+const MAX_HAIKU_RETRIES = 2;
 
 const PROVIDER_KEY_INPUTS: Record<Provider, string> = {
   openai:      'openai_api_key',
@@ -140,17 +144,27 @@ async function generateWithHaikuRetry(
 ): Promise<string> {
   let creative = await callLLM(client, model, prompt);
   let sanitized = sanitizeOutput(effectiveFormat, creative);
+  let retries = 0;
 
-  if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
-    core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
+  // Retry 1 (of MAX_HAIKU_RETRIES): fix structural issues (wrong line count or empty).
+  if (effectiveFormat === 'haiku' && (sanitized.needsHaikuRetry || !sanitized.text)) {
+    retries++;
+    core.info(`Haiku retry ${retries}/${MAX_HAIKU_RETRIES}: fewer than 3 lines or empty output.`);
     const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
     creative = await callLLM(client, model, retryPrompt);
     sanitized = sanitizeOutput(effectiveFormat, creative);
-  } else if (!sanitized.text) {
-    core.info('Sanitized output was empty. Retrying once.');
-    const emptyRetryPrompt = `${prompt}\n\nReminder: Output only the creative content, no title or explanation.`;
-    creative = await callLLM(client, model, emptyRetryPrompt);
-    sanitized = sanitizeOutput(effectiveFormat, creative);
+  }
+
+  // Retry 2 (of MAX_HAIKU_RETRIES): fix syllable counts if structure is now valid.
+  if (effectiveFormat === 'haiku' && retries < MAX_HAIKU_RETRIES && !sanitized.needsHaikuRetry) {
+    const meterFeedback = validateHaikuMeter(sanitized.text);
+    if (meterFeedback) {
+      retries++;
+      core.info(`Haiku retry ${retries}/${MAX_HAIKU_RETRIES}: meter off — ${meterFeedback}`);
+      const meterPrompt = `${prompt}\n\nYour previous attempt had incorrect syllable counts: ${meterFeedback}. Rewrite with exact 5-7-5 syllables, counting each word carefully.`;
+      creative = await callLLM(client, model, meterPrompt);
+      sanitized = sanitizeOutput(effectiveFormat, creative);
+    }
   }
 
   return sanitized.text;

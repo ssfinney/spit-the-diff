@@ -33,8 +33,15 @@ ${PROMPT_FOOTER}`,
   haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
 
 Rules:
-- Exactly 3 lines
-- Approximate 5-7-5 syllable structure
+- Exactly 3 lines in strict 5-7-5 syllable structure
+- Count syllables carefully: for identifiers and filenames, decompose first —
+  split snake_case on underscores, camelCase on capital letters, and pronounce
+  extensions as spoken (\`.py\` = "pie" = 1 syl, \`.ts\` = "tee-ess" = 2 syl,
+  \`.js\` = "jay-ess" = 2 syl). Example: \`outlook_triage.py\` = out·look (2) +
+  tri·age (2) + py (1) = 5 syllables total.
+- Before writing, mentally verify the syllable count of each line — short lines
+  with simple words are the most common under-count trap; count every syllable
+  explicitly rather than trusting intuition on lines that "feel" complete
 - Focus on the main code change
 - Mention a file, function, or module if relevant
 - No title or explanation

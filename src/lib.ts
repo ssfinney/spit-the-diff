@@ -44,6 +44,7 @@ export interface ExistingBotComment {
 }
 
 export const MAX_PROMPT_DIFF_CHARS = 30000;
+export const HAIKU_METER = [5, 7, 5] as const;
 export const DEFAULT_TOP_FILES = 6;
 export const DEFAULT_MAX_PATCH_LINES = 60;
 export const MIC_DROP_MAX_LINES = 2;
@@ -200,6 +201,63 @@ export function normalizeUnicode(text: string): string {
   // letters like curly apostrophe U+02BC), General Punctuation (U+2000-U+206F),
   // Miscellaneous Symbols, and emoji.
   return text.replace(/[^\u0000-\u04FF\u2000-\u206F\u2600-\u27BF\uFE00-\uFEFF\u{1F000}-\u{1FFFF}]+/gu, '—');
+}
+
+// Counts the syllables in a single plain-English word using a heuristic:
+// strips silent-e endings, common -ed/-es suffixes, then counts vowel groups.
+// "i" or "u" before another vowel is split to handle words like "triage" (2 syl).
+// Accurate enough to catch clear haiku meter violations; not a dictionary lookup.
+function syllablesInWord(word: string): number {
+  const w = word.toLowerCase().replace(/[^a-z]/g, '');
+  if (!w) return 0;
+  if (w.length <= 3) return 1;
+
+  let s = w
+    .replace(/[^laeiouy]es$/, '') // -nes/-tes/-mes/-ces etc: 'names' → 'na'
+    .replace(/[^dt]ed$/, '')      // -ed suffix (not -ted/-ded): 'flagged' → 'flagg'
+    .replace(/[^aeiouy]e$/, '');  // silent final e: 'case' → 'cas', 'file' → 'fi'
+
+  if (!s) s = w;
+
+  // Split 'i'/'u' before another vowel so 'triage' → 'tri ag' (2 groups not 1)
+  const normalized = s.replace(/([iu])([aeiouy])/g, '$1 $2');
+  const groups = normalized.match(/[aeiouy]{1,2}/g) ?? [];
+  return Math.max(1, groups.length);
+}
+
+// Counts syllables in one line of a haiku, decomposing snake_case, camelCase,
+// and file extensions before counting (e.g. outlook_triage.py → 2+2+1 = 5).
+export function countLineSyllables(line: string): number {
+  const tokens = line.replace(/[—–]/g, ' ').split(/\s+/).filter(Boolean);
+  let total = 0;
+  for (const token of tokens) {
+    const clean = token.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
+    const parts = clean
+      .split(/[._]/)
+      .flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(' '))
+      .filter(Boolean);
+    for (const part of parts) {
+      total += syllablesInWord(part);
+    }
+  }
+  return total;
+}
+
+// Returns a human-readable description of meter violations, or null if valid.
+// Used to build the retry prompt so the model knows exactly what to fix.
+export function validateHaikuMeter(text: string): string | null {
+  const lines = text.split('\n');
+  if (lines.length !== 3) return null; // structural issues handled elsewhere
+
+  const issues: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const count = countLineSyllables(lines[i]);
+    const expected = HAIKU_METER[i];
+    if (count !== expected) {
+      issues.push(`line ${i + 1} has ~${count} syllables (needs ${expected})`);
+    }
+  }
+  return issues.length > 0 ? issues.join('; ') : null;
 }
 
 export function sanitizeOutput(format: Format, rawText: string): { text: string; needsHaikuRetry: boolean } {
