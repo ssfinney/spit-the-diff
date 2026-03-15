@@ -144,7 +144,8 @@ async function generateWithRetry(
   model: string,
   prompt: { system: string; user: string },
   effectiveFormat: Format,
-  files: PRFile[]
+  files: PRFile[],
+  micDrop = false
 ): Promise<string> {
   let creative = await callLLM(client, model, prompt.user, prompt.system);
   let sanitized = sanitizeOutput(effectiveFormat, creative);
@@ -191,17 +192,32 @@ async function generateWithRetry(
 
   // ── Specificity retry for non-haiku formats ──
   if (effectiveFormat !== 'haiku') {
-    const isSpecific = outputReferencesFiles(sanitized.text, files);
+    // For mic-drop mode the final output is the first MIC_DROP_MAX_LINES lines,
+    // so check only those lines — a file reference on line 3+ will be truncated
+    // away and doesn't make the published comment specific.
+    const effectiveText = (micDrop
+      ? sanitized.text.split('\n').slice(0, MIC_DROP_MAX_LINES).join('\n').trim()
+      : sanitized.text);
+    const isSpecific = outputReferencesFiles(effectiveText, files);
     if (!isSpecific) {
+      const firstDraft = sanitized; // keep as fallback in case the retry errors
       core.info(`${effectiveFormat} output appears generic — retrying with specificity reminder.`);
       const specificityUser = `${prompt.user}\n\nYour previous attempt was too generic and did not mention any specific files, functions, or identifiers from the diff. Here are the key files changed: ${files.slice(0, 5).map(f => f.filename).join(', ')}. Rewrite and reference at least one of these by name — specificity is what makes this funny and useful.`;
-      creative = await callLLM(client, model, specificityUser, prompt.system);
-      sanitized = sanitizeOutput(effectiveFormat, creative);
-      const stillGeneric = !outputReferencesFiles(sanitized.text, files);
-      if (stillGeneric) {
-        core.warning(`${effectiveFormat} output still generic after specificity retry — publishing anyway.`);
-      } else {
-        core.info(`${effectiveFormat} output now references specific files after retry.`);
+      try {
+        creative = await callLLM(client, model, specificityUser, prompt.system);
+        sanitized = sanitizeOutput(effectiveFormat, creative);
+        const retryEffectiveText = (micDrop
+          ? sanitized.text.split('\n').slice(0, MIC_DROP_MAX_LINES).join('\n').trim()
+          : sanitized.text);
+        const stillGeneric = !outputReferencesFiles(retryEffectiveText, files);
+        if (stillGeneric) {
+          core.warning(`${effectiveFormat} output still generic after specificity retry — publishing anyway.`);
+        } else {
+          core.info(`${effectiveFormat} output now references specific files after retry.`);
+        }
+      } catch (err) {
+        core.warning(`${effectiveFormat} specificity retry failed (${err instanceof Error ? err.message : String(err)}) — publishing first draft.`);
+        sanitized = firstDraft;
       }
     }
   }
@@ -369,7 +385,7 @@ async function run(): Promise<void> {
   const prompt = isMicDrop ? buildMicDropPrompt(summary) : buildPrompt(effectiveFormat, summary);
 
   core.info(`Calling ${model}...`);
-  let finalText = await generateWithRetry(client, model, prompt, effectiveFormat, summary.files);
+  let finalText = await generateWithRetry(client, model, prompt, effectiveFormat, summary.files, isMicDrop);
 
   if (enableModeration && provider === 'openai') {
     core.info('Running moderation check...');
@@ -377,7 +393,7 @@ async function run(): Promise<void> {
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
       const safeRetryPrompt = { system: prompt.system, user: `${prompt.user}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.` };
-      const retryText = await generateWithRetry(client, model, safeRetryPrompt, effectiveFormat, summary.files);
+      const retryText = await generateWithRetry(client, model, safeRetryPrompt, effectiveFormat, summary.files, isMicDrop);
       const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {
         core.warning('Second attempt also flagged by moderation. Using fallback message.');

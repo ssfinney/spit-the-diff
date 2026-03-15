@@ -573,6 +573,71 @@ describe('run()', () => {
     expect(llmCreate).toHaveBeenCalledTimes(1);
     expect(mockCreateComment).toHaveBeenCalled();
   });
+
+  it('falls back to the first draft if the specificity retry call errors', async () => {
+    // First call returns generic output, retry throws a network error
+    const llmCreate = vi.fn()
+      .mockResolvedValueOnce({ choices: [{ finish_reason: 'stop', message: { content: 'code was changed\nlines were shifted around' } }] })
+      .mockRejectedValueOnce(new Error('429 rate limited'));
+
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const files = [{ filename: 'src/auth_handler.ts', status: 'modified', additions: 10, deletions: 2 }];
+    const octokit = makeOctokit({ createComment: mockCreateComment, files });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ format: 'rap' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    // Should still post the first draft (not fail the action)
+    expect(mockCreateComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('code was changed') }),
+    );
+    // Should warn about the failed retry
+    const { warning } = await import('@actions/core');
+    expect(vi.mocked(warning)).toHaveBeenCalledWith(expect.stringContaining('429 rate limited'));
+  });
+
+  it('triggers specificity retry in mic-drop mode when the file is only referenced on a line that gets truncated', async () => {
+    // First call: line 1-2 are generic, line 3 mentions auth_handler (but mic-drop truncates to 2 lines)
+    // Second call: both lines mention auth_handler
+    const llmCreate = vi.fn()
+      .mockResolvedValueOnce({ choices: [{ finish_reason: 'stop', message: { content: 'code was pushed today\nsome things were rearranged\nauth_handler got a fix' } }] })
+      .mockResolvedValueOnce({ choices: [{ finish_reason: 'stop', message: { content: 'auth_handler got trimmed\nthe login path is cleaner now' } }] });
+
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const files = [{ filename: 'src/auth_handler.ts', status: 'modified', additions: 10, deletions: 2 }];
+    const octokit = makeOctokit({ createComment: mockCreateComment, files });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    // mic_drop_threshold > totalLines (0) triggers mic-drop mode
+    vi.doMock('@actions/core', () => makeCoreMock({ format: 'rap', mic_drop_threshold: '100' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    // LLM called twice: initial + specificity retry
+    expect(llmCreate).toHaveBeenCalledTimes(2);
+    // The published comment should contain the specific reference
+    expect(mockCreateComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('auth_handler') }),
+    );
+  });
 });
 
 // ─── resolveProvider() unit tests ────────────────────────────────────────────

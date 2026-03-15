@@ -713,6 +713,14 @@ describe('outputReferencesFiles', () => {
     expect(outputReferencesFiles('AUTH_HANDLER was refactored', files)).toBe(true);
   });
 
+  it('does not match a token that appears only as a substring inside an unrelated word', () => {
+    // "api" must not match inside "rapid" or "capability"
+    const apiFiles: PRFile[] = [
+      { filename: 'src/api.ts', status: 'modified', additions: 5, deletions: 2 },
+    ];
+    expect(outputReferencesFiles('rapid refactor of the capability layer', apiFiles)).toBe(false);
+  });
+
   it('GENERIC_FILENAME_TOKENS includes expected common tokens', () => {
     expect(GENERIC_FILENAME_TOKENS.has('index')).toBe(true);
     expect(GENERIC_FILENAME_TOKENS.has('lib')).toBe(true);

@@ -326,7 +326,12 @@ export function outputReferencesFiles(text: string, files: PRFile[]): boolean {
   if (tokens.size === 0) return true; // all files are generic-named; can't check
 
   for (const token of tokens) {
-    if (lowerText.includes(token)) return true;
+    // Use identifier-boundary matching: token must not be immediately preceded
+    // or followed by an alphanumeric character, so e.g. "api" won't match
+    // inside "rapid" or "capability".
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(?<![a-zA-Z0-9])' + escaped + '(?![a-zA-Z0-9])');
+    if (re.test(lowerText)) return true;
   }
   return false;
 }
