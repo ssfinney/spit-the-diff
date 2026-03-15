@@ -510,6 +510,69 @@ describe('run()', () => {
     const { setFailed } = await import('@actions/core');
     expect(vi.mocked(setFailed)).toHaveBeenCalledWith('API exploded');
   });
+
+  it('retries once when rap output is generic and does not reference any files', async () => {
+    // First call returns generic output, second call returns specific output
+    const llmCreate = vi.fn()
+      .mockResolvedValueOnce({ choices: [{ finish_reason: 'stop', message: { content: 'code was changed\nlines were shifted around' } }] })
+      .mockResolvedValueOnce({ choices: [{ finish_reason: 'stop', message: { content: 'auth_handler got a rewrite\nnow the login flow is tight' } }] });
+
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const files = [{ filename: 'src/auth_handler.ts', status: 'modified', additions: 10, deletions: 2 }];
+    const octokit = makeOctokit({ createComment: mockCreateComment, files });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ format: 'rap' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    // Should have called LLM twice: initial + specificity retry
+    expect(llmCreate).toHaveBeenCalledTimes(2);
+
+    // Final output should reference the specific file
+    const { setOutput } = await import('@actions/core');
+    expect(vi.mocked(setOutput)).toHaveBeenCalledWith('content', expect.stringContaining('auth_handler'));
+
+    // Should have logged the generic retry message
+    const { info } = await import('@actions/core');
+    expect(vi.mocked(info)).toHaveBeenCalledWith(expect.stringContaining('generic'));
+  });
+
+  it('does not trigger specificity retry for haiku format', async () => {
+    // Generic haiku output (3 valid lines, no file references)
+    const llmCreate = vi.fn().mockResolvedValue({
+      choices: [{ finish_reason: 'stop', message: { content: 'code flows through the void\nchanges come and go each day\nmerged at last today' } }],
+    });
+
+    const mockCreateComment = vi.fn().mockResolvedValue({});
+    const files = [{ filename: 'src/auth_handler.ts', status: 'modified', additions: 10, deletions: 2 }];
+    const octokit = makeOctokit({ createComment: mockCreateComment, files });
+
+    vi.doMock('openai', () => makeOpenAIMock({ llmCreate }));
+    vi.doMock('@actions/core', () => makeCoreMock({ format: 'haiku' }));
+    vi.doMock('@actions/github', () => ({
+      getOctokit: vi.fn().mockReturnValue(octokit),
+      context: {
+        payload: { pull_request: { number: 1, title: 'T', labels: [] }, action: 'opened' },
+        repo: { owner: 'o', repo: 'r' },
+      },
+    }));
+
+    await import('./index');
+    await flushRun();
+
+    // Haiku with valid structure and meter — no retries at all
+    expect(llmCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreateComment).toHaveBeenCalled();
+  });
 });
 
 // ─── resolveProvider() unit tests ────────────────────────────────────────────

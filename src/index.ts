@@ -6,6 +6,7 @@ import {
   type Provider,
   type PRSummary,
   type ExistingBotComment,
+  type PRFile,
   DEFAULT_TOP_FILES,
   DEFAULT_MAX_PATCH_LINES,
   MAX_PROMPT_DIFF_CHARS,
@@ -23,10 +24,12 @@ import {
   buildCompressedDiff,
   countDiffLines,
   validateHaikuMeter,
+  outputReferencesFiles,
 } from './lib';
 
 // Maximum number of retries for haiku generation (initial call + MAX_HAIKU_RETRIES).
 const MAX_HAIKU_RETRIES = 2;
+const MAX_SPECIFICITY_RETRIES = 1;
 
 const PROVIDER_KEY_INPUTS: Record<Provider, string> = {
   openai:      'openai_api_key',
@@ -136,11 +139,12 @@ async function fetchPRData(
   };
 }
 
-async function generateWithHaikuRetry(
+async function generateWithRetry(
   client: OpenAI,
   model: string,
   prompt: { system: string; user: string },
-  effectiveFormat: Format
+  effectiveFormat: Format,
+  files: PRFile[]
 ): Promise<string> {
   let creative = await callLLM(client, model, prompt.user, prompt.system);
   let sanitized = sanitizeOutput(effectiveFormat, creative);
@@ -182,6 +186,23 @@ async function generateWithHaikuRetry(
       core.warning(`Haiku published with meter violation after ${retries} retr${retries === 1 ? 'y' : 'ies'}: ${finalMeter}`);
     } else {
       core.info(`Haiku meter valid after ${retries} retr${retries === 1 ? 'y' : 'ies'}.`);
+    }
+  }
+
+  // ── Specificity retry for non-haiku formats ──
+  if (effectiveFormat !== 'haiku') {
+    const isSpecific = outputReferencesFiles(sanitized.text, files);
+    if (!isSpecific) {
+      core.info(`${effectiveFormat} output appears generic — retrying with specificity reminder.`);
+      const specificityUser = `${prompt.user}\n\nYour previous attempt was too generic and did not mention any specific files, functions, or identifiers from the diff. Here are the key files changed: ${files.slice(0, 5).map(f => f.filename).join(', ')}. Rewrite and reference at least one of these by name — specificity is what makes this funny and useful.`;
+      creative = await callLLM(client, model, specificityUser, prompt.system);
+      sanitized = sanitizeOutput(effectiveFormat, creative);
+      const stillGeneric = !outputReferencesFiles(sanitized.text, files);
+      if (stillGeneric) {
+        core.warning(`${effectiveFormat} output still generic after specificity retry — publishing anyway.`);
+      } else {
+        core.info(`${effectiveFormat} output now references specific files after retry.`);
+      }
     }
   }
 
@@ -348,7 +369,7 @@ async function run(): Promise<void> {
   const prompt = isMicDrop ? buildMicDropPrompt(summary) : buildPrompt(effectiveFormat, summary);
 
   core.info(`Calling ${model}...`);
-  let finalText = await generateWithHaikuRetry(client, model, prompt, effectiveFormat);
+  let finalText = await generateWithRetry(client, model, prompt, effectiveFormat, summary.files);
 
   if (enableModeration && provider === 'openai') {
     core.info('Running moderation check...');
@@ -356,7 +377,7 @@ async function run(): Promise<void> {
     if (flagged) {
       core.warning('First attempt flagged by moderation. Retrying...');
       const safeRetryPrompt = { system: prompt.system, user: `${prompt.user}\n\nImportant: Keep all content strictly workplace-safe. Avoid any slang, idioms, or references that could be considered offensive or inappropriate.` };
-      const retryText = await generateWithHaikuRetry(client, model, safeRetryPrompt, effectiveFormat);
+      const retryText = await generateWithRetry(client, model, safeRetryPrompt, effectiveFormat, summary.files);
       const flaggedAgain = await moderateText(client, retryText);
       if (flaggedAgain) {
         core.warning('Second attempt also flagged by moderation. Using fallback message.');
