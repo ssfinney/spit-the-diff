@@ -19,6 +19,8 @@ import {
   NOISE_FILE_PATTERNS,
   MIC_DROP_MAX_LINES,
   EXTENSION_SYLLABLES,
+  outputReferencesFiles,
+  GENERIC_FILENAME_TOKENS,
   type PRFile,
   type PRSummary,
 } from './lib';
@@ -666,5 +668,63 @@ describe('buildMicDropPrompt', () => {
 describe('MIC_DROP_MAX_LINES', () => {
   it('is 2', () => {
     expect(MIC_DROP_MAX_LINES).toBe(2);
+  });
+});
+
+// ─── outputReferencesFiles ────────────────────────────────────────────────────
+
+describe('outputReferencesFiles', () => {
+  const files: PRFile[] = [
+    { filename: 'src/auth_handler.ts', status: 'modified', additions: 10, deletions: 2 },
+    { filename: 'src/lib.ts', status: 'modified', additions: 5, deletions: 1 },
+    { filename: 'tests/auth_handler.test.ts', status: 'modified', additions: 8, deletions: 0 },
+  ];
+
+  it('returns true when output mentions a filename stem', () => {
+    expect(outputReferencesFiles('refactored auth_handler to split concerns', files)).toBe(true);
+  });
+
+  it('returns true when output mentions a sub-token from a filename', () => {
+    expect(outputReferencesFiles('the auth logic got tighter', files)).toBe(true);
+  });
+
+  it('returns true when output mentions "handler"', () => {
+    expect(outputReferencesFiles('that handler is sweating on the stand', files)).toBe(true);
+  });
+
+  it('returns false when output is completely generic', () => {
+    expect(outputReferencesFiles('this code needs therapy and a vacation', files)).toBe(false);
+  });
+
+  it('returns false when output only matches generic tokens', () => {
+    // "lib" and "test" are in GENERIC_FILENAME_TOKENS
+    expect(outputReferencesFiles('the lib was updated and tests were changed', files)).toBe(false);
+  });
+
+  it('returns true when all files have generic names (no tokens to check)', () => {
+    const genericFiles: PRFile[] = [
+      { filename: 'src/index.ts', status: 'modified', additions: 1, deletions: 1 },
+    ];
+    // Should return true because we can't meaningfully check specificity
+    expect(outputReferencesFiles('generic output here', genericFiles)).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(outputReferencesFiles('AUTH_HANDLER was refactored', files)).toBe(true);
+  });
+
+  it('does not match a token that appears only as a substring inside an unrelated word', () => {
+    // "api" must not match inside "rapid" or "capability"
+    const apiFiles: PRFile[] = [
+      { filename: 'src/api.ts', status: 'modified', additions: 5, deletions: 2 },
+    ];
+    expect(outputReferencesFiles('rapid refactor of the capability layer', apiFiles)).toBe(false);
+  });
+
+  it('GENERIC_FILENAME_TOKENS includes expected common tokens', () => {
+    expect(GENERIC_FILENAME_TOKENS.has('index')).toBe(true);
+    expect(GENERIC_FILENAME_TOKENS.has('lib')).toBe(true);
+    expect(GENERIC_FILENAME_TOKENS.has('test')).toBe(true);
+    expect(GENERIC_FILENAME_TOKENS.has('config')).toBe(true);
   });
 });

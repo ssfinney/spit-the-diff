@@ -289,6 +289,53 @@ export function validateHaikuMeter(text: string): string | null {
   return issues.length > 0 ? issues.join('; ') : null;
 }
 
+export const GENERIC_FILENAME_TOKENS = new Set([
+  'index', 'main', 'app', 'test', 'spec', 'config', 'lib', 'utils',
+  'helpers', 'types', 'mod',
+]);
+
+/**
+ * Returns true if `text` mentions at least one filename stem, function-like
+ * identifier, or significant token from the PR file list. Used to detect
+ * generic LLM output that ignores the actual diff.
+ *
+ * Only checked for rap / roast / mic_drop — haiku has its own meter-based
+ * quality loop.
+ */
+export function outputReferencesFiles(text: string, files: PRFile[]): boolean {
+  const lowerText = text.toLowerCase();
+  const tokens = new Set<string>();
+
+  for (const file of files) {
+    const basename = file.filename.split('/').pop() ?? '';
+    const stem = basename.replace(/\.[^.]+$/, '');
+
+    if (stem && !GENERIC_FILENAME_TOKENS.has(stem.toLowerCase())) {
+      tokens.add(stem.toLowerCase());
+    }
+
+    const parts = stem
+      .split(/[_\-.]/)
+      .flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(' '))
+      .map(p => p.toLowerCase())
+      .filter(p => p.length >= 3 && !GENERIC_FILENAME_TOKENS.has(p));
+
+    for (const part of parts) tokens.add(part);
+  }
+
+  if (tokens.size === 0) return true; // all files are generic-named; can't check
+
+  for (const token of tokens) {
+    // Use identifier-boundary matching: token must not be immediately preceded
+    // or followed by an alphanumeric character, so e.g. "api" won't match
+    // inside "rapid" or "capability".
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(?<![a-zA-Z0-9])' + escaped + '(?![a-zA-Z0-9])');
+    if (re.test(lowerText)) return true;
+  }
+  return false;
+}
+
 export function sanitizeOutput(format: Format, rawText: string): { text: string; needsHaikuRetry: boolean } {
   const cleanedLines = normalizeUnicode(rawText)
     .split('\n')

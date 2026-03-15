@@ -22,6 +22,7 @@ Requirements:
 - No profanity
 - Do not use bullet points or numbering
 - Output only the verse, no title or explanation
+- If your verse could describe any PR without changes, it's not specific enough. Rewrite.
 
 Example of the style — rhythm and specificity, not content (write something original for the actual diff):
 Two functions merged, the helper's gone for good,
@@ -56,7 +57,8 @@ Rules:
 - No harassment or personal attacks
 - No personal attacks
 - Do not use bullet points or numbering
-- Output only the roast, no title or explanation`,
+- Output only the roast, no title or explanation
+- If your roast could apply to any codebase, it's not a roast — it's a horoscope. Be specific.`,
     user: PROMPT_FOOTER,
   },
 
