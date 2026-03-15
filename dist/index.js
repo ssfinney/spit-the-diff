@@ -35685,6 +35685,8 @@ const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const openai_1 = __importDefault(__nccwpck_require__(2583));
 const lib_1 = __nccwpck_require__(5704);
+// Maximum number of retries for haiku generation (initial call + MAX_HAIKU_RETRIES).
+const MAX_HAIKU_RETRIES = 2;
 const PROVIDER_KEY_INPUTS = {
     openai: 'openai_api_key',
     anthropic: 'anthropic_api_key',
@@ -35767,17 +35769,42 @@ async function fetchPRData(octokit, owner, repo, prNumber, maxFiles = lib_1.DEFA
 async function generateWithHaikuRetry(client, model, prompt, effectiveFormat) {
     let creative = await callLLM(client, model, prompt);
     let sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
-    if (effectiveFormat === 'haiku' && sanitized.needsHaikuRetry) {
-        core.info('Haiku output had fewer than 3 lines. Retrying once with strict reminder.');
+    let retries = 0;
+    if (effectiveFormat === 'haiku') {
+        const initialMeter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : ((0, lib_1.validateHaikuMeter)(sanitized.text) ?? 'valid');
+        core.info(`Haiku attempt 1: ${initialMeter}`);
+    }
+    // Retry 1 (of MAX_HAIKU_RETRIES): fix structural issues (wrong line count or empty).
+    if (effectiveFormat === 'haiku' && (sanitized.needsHaikuRetry || !sanitized.text)) {
+        retries++;
+        core.info(`Haiku retry ${retries}/${MAX_HAIKU_RETRIES}: fewer than 3 lines or empty output.`);
         const retryPrompt = `${prompt}\n\nReminder: Output exactly 3 lines. No preface.`;
         creative = await callLLM(client, model, retryPrompt);
         sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+        const meterAfter = sanitized.needsHaikuRetry ? 'still fewer than 3 lines' : ((0, lib_1.validateHaikuMeter)(sanitized.text) ?? 'valid');
+        core.info(`Haiku retry ${retries} result: ${meterAfter}`);
     }
-    else if (!sanitized.text) {
-        core.info('Sanitized output was empty. Retrying once.');
-        const emptyRetryPrompt = `${prompt}\n\nReminder: Output only the creative content, no title or explanation.`;
-        creative = await callLLM(client, model, emptyRetryPrompt);
-        sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+    // Retry 2 (of MAX_HAIKU_RETRIES): fix syllable counts if structure is now valid.
+    if (effectiveFormat === 'haiku' && retries < MAX_HAIKU_RETRIES && !sanitized.needsHaikuRetry) {
+        const meterFeedback = (0, lib_1.validateHaikuMeter)(sanitized.text);
+        if (meterFeedback) {
+            retries++;
+            core.info(`Haiku retry ${retries}/${MAX_HAIKU_RETRIES}: meter off — ${meterFeedback}`);
+            const meterPrompt = `${prompt}\n\nYour previous attempt had incorrect syllable counts: ${meterFeedback}. Rewrite with exact 5-7-5 syllables, counting each word carefully.`;
+            creative = await callLLM(client, model, meterPrompt);
+            sanitized = (0, lib_1.sanitizeOutput)(effectiveFormat, creative);
+            const meterAfter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : ((0, lib_1.validateHaikuMeter)(sanitized.text) ?? 'valid');
+            core.info(`Haiku retry ${retries} result: ${meterAfter}`);
+        }
+    }
+    if (effectiveFormat === 'haiku') {
+        const finalMeter = sanitized.needsHaikuRetry ? 'fewer than 3 lines' : (0, lib_1.validateHaikuMeter)(sanitized.text);
+        if (finalMeter) {
+            core.warning(`Haiku published with meter violation after ${retries} retr${retries === 1 ? 'y' : 'ies'}: ${finalMeter}`);
+        }
+        else {
+            core.info(`Haiku meter valid after ${retries} retr${retries === 1 ? 'y' : 'ies'}.`);
+        }
     }
     return sanitized.text;
 }
@@ -35976,7 +36003,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.MIC_DROP_MAX_LINES = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.MAX_PROMPT_DIFF_CHARS = exports.PROVIDER_CONFIGS = void 0;
+exports.NOISE_FILE_PATTERNS = exports.MODERATION_FALLBACK = exports.COMMENT_HEADERS = exports.VALID_FORMATS = exports.COMMENT_MARKER_REGEX = exports.COMMENT_MARKER_KEY = exports.MAX_LINES_BY_FORMAT = exports.MIC_DROP_MAX_LINES = exports.DEFAULT_MAX_PATCH_LINES = exports.DEFAULT_TOP_FILES = exports.HAIKU_METER = exports.MAX_PROMPT_DIFF_CHARS = exports.PROVIDER_CONFIGS = void 0;
 exports.parseFormat = parseFormat;
 exports.formatFilesList = formatFilesList;
 exports.truncatePatchLines = truncatePatchLines;
@@ -35986,6 +36013,8 @@ exports.buildMicDropPrompt = buildMicDropPrompt;
 exports.countDiffLines = countDiffLines;
 exports.removeLeadingMetaLine = removeLeadingMetaLine;
 exports.normalizeUnicode = normalizeUnicode;
+exports.countLineSyllables = countLineSyllables;
+exports.validateHaikuMeter = validateHaikuMeter;
 exports.sanitizeOutput = sanitizeOutput;
 exports.buildInputHash = buildInputHash;
 exports.buildCommentBody = buildCommentBody;
@@ -36003,6 +36032,7 @@ exports.PROVIDER_CONFIGS = {
     together: { baseURL: 'https://api.together.xyz/v1', defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
 };
 exports.MAX_PROMPT_DIFF_CHARS = 30000;
+exports.HAIKU_METER = [5, 7, 5];
 exports.DEFAULT_TOP_FILES = 6;
 exports.DEFAULT_MAX_PATCH_LINES = 60;
 exports.MIC_DROP_MAX_LINES = 2;
@@ -36015,7 +36045,7 @@ exports.COMMENT_MARKER_KEY = 'spit-the-diff';
 exports.COMMENT_MARKER_REGEX = /<!--\s*spit-the-diff(?::hash=([a-f0-9]+))?\s*-->/i;
 exports.VALID_FORMATS = ['rap', 'haiku', 'roast'];
 exports.COMMENT_HEADERS = {
-    rap: '🎤 **Diff Cypher**',
+    rap: '🎤 **Diff Rap**',
     haiku: '🌸 **Diff Haiku**',
     roast: '🔥 **Code Roast**',
 };
@@ -36125,6 +36155,60 @@ function normalizeUnicode(text) {
     // Miscellaneous Symbols, and emoji.
     return text.replace(/[^\u0000-\u04FF\u2000-\u206F\u2600-\u27BF\uFE00-\uFEFF\u{1F000}-\u{1FFFF}]+/gu, '—');
 }
+// Counts the syllables in a single plain-English word using a heuristic:
+// strips silent-e endings, common -ed/-es suffixes, then counts vowel groups.
+// "i" or "u" before another vowel is split to handle words like "triage" (2 syl).
+// Accurate enough to catch clear haiku meter violations; not a dictionary lookup.
+function syllablesInWord(word) {
+    const w = word.toLowerCase().replace(/[^a-z]/g, '');
+    if (!w)
+        return 0;
+    if (w.length <= 3)
+        return 1;
+    let s = w
+        .replace(/[^laeiouy]es$/, '') // -nes/-tes/-mes/-ces etc: 'names' → 'na'
+        .replace(/[^dt]ed$/, '') // -ed suffix (not -ted/-ded): 'flagged' → 'flagg'
+        .replace(/[^aeiouy]e$/, ''); // silent final e: 'case' → 'cas', 'file' → 'fi'
+    if (!s)
+        s = w;
+    // Split 'i'/'u' before another vowel so 'triage' → 'tri ag' (2 groups not 1)
+    const normalized = s.replace(/([iu])([aeiouy])/g, '$1 $2');
+    const groups = normalized.match(/[aeiouy]{1,2}/g) ?? [];
+    return Math.max(1, groups.length);
+}
+// Counts syllables in one line of a haiku, decomposing snake_case, camelCase,
+// and file extensions before counting (e.g. outlook_triage.py → 2+2+1 = 5).
+function countLineSyllables(line) {
+    const tokens = line.replace(/[—–]/g, ' ').split(/\s+/).filter(Boolean);
+    let total = 0;
+    for (const token of tokens) {
+        const clean = token.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
+        const parts = clean
+            .split(/[._]/)
+            .flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(' '))
+            .filter(Boolean);
+        for (const part of parts) {
+            total += syllablesInWord(part);
+        }
+    }
+    return total;
+}
+// Returns a human-readable description of meter violations, or null if valid.
+// Used to build the retry prompt so the model knows exactly what to fix.
+function validateHaikuMeter(text) {
+    const lines = text.split('\n');
+    if (lines.length !== 3)
+        return null; // structural issues handled elsewhere
+    const issues = [];
+    for (let i = 0; i < 3; i++) {
+        const count = countLineSyllables(lines[i]);
+        const expected = exports.HAIKU_METER[i];
+        if (count !== expected) {
+            issues.push(`line ${i + 1} has ~${count} syllables (needs ${expected})`);
+        }
+    }
+    return issues.length > 0 ? issues.join('; ') : null;
+}
 function sanitizeOutput(format, rawText) {
     const cleanedLines = normalizeUnicode(rawText)
         .split('\n')
@@ -36202,8 +36286,15 @@ ${PROMPT_FOOTER}`,
     haiku: `You are a haiku poet. Write a haiku summarizing the key change in this GitHub pull request.
 
 Rules:
-- Exactly 3 lines
-- Approximate 5-7-5 syllable structure
+- Exactly 3 lines in strict 5-7-5 syllable structure
+- Count syllables carefully: for identifiers and filenames, decompose first —
+  split snake_case on underscores, camelCase on capital letters, and pronounce
+  extensions as spoken (\`.py\` = "pie" = 1 syl, \`.ts\` = "tee-ess" = 2 syl,
+  \`.js\` = "jay-ess" = 2 syl). Example: \`outlook_triage.py\` = out·look (2) +
+  tri·age (2) + py (1) = 5 syllables total.
+- Before writing, mentally verify the syllable count of each line — short lines
+  with simple words are the most common under-count trap; count every syllable
+  explicitly rather than trusting intuition on lines that "feel" complete
 - Focus on the main code change
 - Mention a file, function, or module if relevant
 - No title or explanation
