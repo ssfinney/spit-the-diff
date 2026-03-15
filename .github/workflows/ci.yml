@@ -30,7 +30,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v4
         with:
@@ -44,7 +44,9 @@ jobs:
       - name: Fail if dist is stale
         run: |
           if ! git diff --quiet dist/ || [ -n "$(git ls-files --others --exclude-standard dist/)" ]; then
-            echo "dist/ is out of date. Run 'npm run build' and commit the result."
+            echo "dist/ is out of date."
+            echo "Trusted branch pushes will be auto-fixed by the dist sync workflow."
+            echo "Forks still need to run 'npm run build' and commit the result locally."
             git diff --stat dist/
             git ls-files --others --exclude-standard dist/
             exit 1
