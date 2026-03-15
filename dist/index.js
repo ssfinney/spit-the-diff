@@ -35687,7 +35687,6 @@ const openai_1 = __importDefault(__nccwpck_require__(2577));
 const lib_1 = __nccwpck_require__(3760);
 // Maximum number of retries for haiku generation (initial call + MAX_HAIKU_RETRIES).
 const MAX_HAIKU_RETRIES = 2;
-const MAX_SPECIFICITY_RETRIES = 1;
 const PROVIDER_KEY_INPUTS = {
     openai: 'openai_api_key',
     anthropic: 'anthropic_api_key',
