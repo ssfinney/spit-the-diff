@@ -55,8 +55,8 @@ That’s it. Customize format and other options in [Inputs](#inputs).
 
 > 🌸 **Haiku**
 >
-> Old serializer
-> Cookies crumble into dust
+> Old serializer  
+> Cookies crumble into dust  
 > Auth returns to life
 
 **Roast mode** (triggered by the `roast-me` label):
